@@ -1,0 +1,6 @@
+[package]
+name = "lru"
+version = "0.1.0"
+authors = ["Jerome Froelich <jeromefroe@uber.com>"]
+
+[dependencies]
