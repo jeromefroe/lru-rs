@@ -9,10 +9,7 @@ addons:
       - binutils-dev
 
 rust:
-  - stable
-  - beta
   - nightly
-  - 1.14.0
 
 before_script:
   - |
