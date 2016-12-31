@@ -1,6 +1,16 @@
 [package]
 name = "lru"
 version = "0.1.0"
-authors = ["Jerome Froelich <jeromefroe@uber.com>"]
+authors = ["Jerome Froelich <jeromefroelic@hotmail.com>"]
+description = "A LRU cache implementation"
+homepage = "https://github.com/jeromefroe/lru-rs"
+repository = "https://github.com/jeromefroe/lru-rs.git"
+documentation = "https://docs.rs/lru-rs/"
+readme = "README.md"
+license = "MIT"
+keywords = ["LRU", "cache"]
+
+[features]
+nightly = []
 
 [dependencies]

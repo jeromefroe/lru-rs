@@ -20,211 +20,381 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-#![feature(shared)]
+//! An implementation of a LRU cache. The cache supports `get`, `put`, and `remove`
+//! operations, all of which are O(1). This crate was heavily influenced by the
+//! [LRU Cache implementation in an earlier version of Rust's std::collections crate] (https://doc.rust-lang.org/0.12.0/std/collections/lru_cache/struct.LruCache.html).
+//!
+//! ## Example
+//!
+//! ```rust,no_run
+//! extern crate lru;
+//!
+//! use lru::LruCache;
+//!
+//! fn main() {
+//!         let mut cache = LruCache::new(2);
+//!         cache.put("apple".to_string(), "red".to_string());
+//!         cache.put("banana".to_string(), "yellow".to_string());
+//!
+//!         assert_eq!(*cache.get(&"apple".to_string()).unwrap(), "red".to_string());
+//!         assert_eq!(*cache.get(&"banana".to_string()).unwrap(), "yellow".to_string());
+//!         assert!(cache.get(&"pear".to_string()).is_none());
+//!
+//!         cache.put("pear".to_string(), "green".to_string());
+//!
+//!         assert_eq!(*cache.get(&"pear".to_string()).unwrap(), "green".to_string());
+//!         assert_eq!(*cache.get(&"banana".to_string()).unwrap(), "yellow".to_string());
+//!         assert!(cache.get(&"apple".to_string()).is_none());
+//! }
+//! ```
 
-use std::ptr::Shared;
-use std::hash::Hash;
+#![feature(box_patterns)]
+
+use std::mem;
+use std::ptr;
+use std::hash::{Hash, Hasher};
 use std::collections::HashMap;
 
-struct Entry<K, V> {
-    prev: Option<Shared<Entry<K, V>>>,
-    next: Option<Shared<Entry<K, V>>>,
+// Struct used to hold a reference to a key
+struct KeyRef<K> {
+    k: *const K,
+}
+
+impl<K: Hash> Hash for KeyRef<K> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        unsafe { (*self.k).hash(state) }
+    }
+}
+
+impl<K: PartialEq> PartialEq for KeyRef<K> {
+    fn eq(&self, other: &KeyRef<K>) -> bool {
+        unsafe { (*self.k).eq(&*other.k) }
+    }
+}
+
+impl<K: Eq> Eq for KeyRef<K> {}
+
+// Struct used to hold a key value pair. Also contains references to previous and next entries
+// so we can maintain the entries in a linked list ordered by their use.
+struct LruEntry<K, V> {
     key: K,
     val: V,
+    prev: *mut LruEntry<K, V>,
+    next: *mut LruEntry<K, V>,
 }
 
-impl<K, V> Entry<K, V> {
+impl<K, V> LruEntry<K, V> {
     fn new(key: K, val: V) -> Self {
-        Entry {
-            next: None,
-            prev: None,
+        LruEntry {
             key: key,
             val: val,
+            prev: ptr::null_mut(),
+            next: ptr::null_mut(),
         }
     }
 }
 
-struct LinkedList<K: Eq + Clone, V> {
-    head: Option<Shared<Entry<K, V>>>,
-    tail: Option<Shared<Entry<K, V>>>, // might need a marker: PhantomData here
-    len: usize,
+/// An LRU Cache
+pub struct LruCache<K, V> {
+    map: HashMap<KeyRef<K>, Box<LruEntry<K, V>>>,
     cap: usize,
+
+    // head and tail are sigil nodes to faciliate inserting entries
+    head: *mut LruEntry<K, V>,
+    tail: *mut LruEntry<K, V>,
 }
 
-impl<K: Eq + Clone, V> LinkedList<K, V> {
-    fn new(cap: usize) -> Self {
-        LinkedList {
-            head: None,
-            tail: None,
-            len: 0,
+impl<K: Hash + Eq, V> LruCache<K, V> {
+    /// Create a new LRU Cache that holds at most `cap` items.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache: LruCache<isize, &str> = LruCache::new(10);
+    /// ```
+    pub fn new(cap: usize) -> LruCache<K, V> {
+        let mut cache = LruCache {
+            map: HashMap::new(),
             cap: cap,
-        }
-    }
-
-    fn insert(&mut self, mut entry: Shared<Entry<K, V>>) -> Option<K> {
-        let mut evicted = None;
-
-        if self.len == self.cap {
-            match self.tail {
-                // we will require that self.cap > 0 so that self.tail will never be None when
-                // the list is full
-                None => unreachable!(),
-                Some(tail) => {
-                    unsafe {
-                        evicted = Some((**tail).key.clone());
-                    }
-                    self.remove_entry(tail);
-                }
-            };
-        }
-
-        self.insert_head(entry);
-
-        evicted
-    }
-
-    fn move_to_front(&mut self, mut entry: Shared<Entry<K, V>>) {
-        unsafe {
-            match self.head {
-                None => (),
-                Some(head) => {
-                    if (**head).key == (**entry).key {
-                        return;
-                    }
-                }
-            }
-        }
-
-        // remove the Entry and insert it at the head
-        self.remove_entry(entry);
-        self.insert_head(entry);
-    }
-
-    fn insert_head(&mut self, mut entry: Shared<Entry<K, V>>) {
-        unsafe {
-            (**entry).next = self.head;
-            (**entry).prev = None;
-            let entry = Some(entry);
-
-            match self.head {
-                None => self.tail = entry,
-                Some(head) => (**head).prev = entry,
-            }
-
-            self.head = entry;
-            self.len += 1;
-        }
-    }
-
-    fn remove_entry(&mut self, mut entry: Shared<Entry<K, V>>) {
-        unsafe {
-            let ref mut entry = **entry;
-
-            match entry.prev {
-                None => self.head = entry.next,
-                Some(prev) => (**prev).next = entry.next,
-            }
-
-            match entry.next {
-                None => self.tail = entry.prev,
-                Some(next) => (**next).prev = entry.prev,
-            }
-        }
-
-        self.len -= 1;
-    }
-}
-
-pub struct LRU<K: Eq + Clone + Hash, V> {
-    map: HashMap<K, Shared<Entry<K, V>>>,
-    list: LinkedList<K, V>,
-}
-
-impl<K: Eq + Clone + Hash, V> LRU<K, V> {
-    pub fn new(cap: usize) -> Self {
-        if cap == 0 {
-            panic!("LRU must have a nonzero capacity");
-        }
-
-        LRU {
-            map: HashMap::with_capacity(cap),
-            list: LinkedList::new(cap),
-        }
-    }
-
-    pub fn get(&mut self, key: K) -> Option<&V> {
-        match self.map.get(&key) {
-            None => None,
-            Some(val) => {
-                self.list.move_to_front(*val);
-                unsafe { Some(&(***val).val) }
-            }
-        }
-    }
-
-    pub fn put(&mut self, key: K, val: V) {
-        match self.map.get(&key) {
-            None => (),
-            Some(entry) => {
-                unsafe {
-                    (***entry).val = val;
-                }
-                self.list.move_to_front(*entry);
-                return;
-            }
-        }
-
-        let entry;
-        unsafe {
-            entry = Shared::new(Box::into_raw(Box::new(Entry::new(key.clone(), val))));
-        }
-        self.map.insert(key, entry);
-
-        let evicted = match self.list.insert(entry.clone()) {
-            None => return,
-            Some(evicted) => evicted,
+            head: unsafe { Box::into_raw(Box::new(mem::uninitialized::<LruEntry<K, V>>())) },
+            tail: unsafe { Box::into_raw(Box::new(mem::uninitialized::<LruEntry<K, V>>())) },
         };
 
-        match self.map.remove(&evicted) {
-            None => unreachable!(),
-            Some(val) => {
-                // free the Entry by turning it back into a Box
-                unsafe {
-                    Box::from_raw(*val);
-                }
+        unsafe {
+            (*cache.head).next = cache.tail;
+            (*cache.tail).prev = cache.head;
+        }
+
+        cache
+    }
+
+    /// Put a key-value pair into cache. If the key already exists update its value.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// cache.put(1, "a");
+    /// cache.put(2, "b");
+    /// assert_eq!(cache.get(&1), Some(&"a"));
+    /// assert_eq!(cache.get(&2), Some(&"b"));
+    /// ```
+    pub fn put(&mut self, k: K, v: V) {
+        let node_ptr = self.map.get_mut(&KeyRef { k: &k }).map(|node| {
+            let node_ptr: *mut LruEntry<K, V> = &mut **node;
+            node_ptr
+        });
+
+        match node_ptr {
+            Some(node_ptr) => {
+                // if the key is already in the cache just update its value and move it to the
+                // front of the list
+                unsafe { (*node_ptr).val = v };
+                self.detach(node_ptr);
+                self.attach(node_ptr);
             }
+            None => {
+                let mut node = if self.len() == self.cap() {
+                    // if the cache is full, remove the last entry so we can use it for the new key
+                    let old_key = KeyRef { k: unsafe { &(*(*self.tail).prev).key } };
+                    let mut old_node = self.map.remove(&old_key).unwrap();
+
+                    old_node.key = k;
+                    old_node.val = v;
+
+                    let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
+                    self.detach(node_ptr);
+
+                    old_node
+                } else {
+                    // if the cache is not full allocate a new LruEntry
+                    Box::new(LruEntry::new(k, v))
+                };
+
+                let node_ptr: *mut LruEntry<K, V> = &mut *node;
+                self.attach(node_ptr);
+
+                let keyref = unsafe { &(*node_ptr).key };
+                self.map.insert(KeyRef { k: keyref }, node);
+            }
+        }
+    }
+
+    /// Return the value corresponding to the key in the cache or `None` if it is not
+    /// present in the cache.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// cache.put(1, "a");
+    /// cache.put(2, "b");
+    /// cache.put(2, "c");
+    /// cache.put(3, "d");
+    ///
+    /// assert_eq!(cache.get(&1), None);
+    /// assert_eq!(cache.get(&2), Some(&"c"));
+    /// assert_eq!(cache.get(&3), Some(&"d"));
+    /// ```
+    pub fn get<'a>(&'a mut self, k: &K) -> Option<&'a V> {
+        let key = KeyRef { k: k };
+        let (node_ptr, value) = match self.map.get_mut(&key) {
+            None => (None, None),
+            Some(node) => {
+                let node_ptr: *mut LruEntry<K, V> = &mut **node;
+                (Some(node_ptr), Some(unsafe { &(*node_ptr).val }))
+            }
+        };
+
+        match node_ptr {
+            None => (),
+            Some(node_ptr) => {
+                self.detach(node_ptr);
+                self.attach(node_ptr);
+            }
+        }
+
+        value
+    }
+
+    /// Remove and return the value corresponding to the key from the cache or
+    /// `None` if it does not exist.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// cache.put(2, "a");
+    ///
+    /// assert_eq!(cache.pop(&1), None);
+    /// assert_eq!(cache.pop(&2), Some("a"));
+    /// assert_eq!(cache.pop(&2), None);
+    /// assert_eq!(cache.len(), 0);
+    /// ```
+    pub fn pop(&mut self, k: &K) -> Option<V> {
+        let key = KeyRef { k: k };
+        match self.map.remove(&key) {
+            None => None,
+            Some(lru_entry) => Some(lru_entry.val),
+        }
+    }
+
+    /// Return the number of key-value pairs that are currently in the the cache.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::new(2);
+    /// assert_eq!(cache.len(), 0);
+    ///
+    /// cache.put(1, "a");
+    /// assert_eq!(cache.len(), 1);
+    ///
+    /// cache.put(2, "b");
+    /// assert_eq!(cache.len(), 2);
+    ///
+    /// cache.put(3, "c");
+    /// assert_eq!(cache.len(), 2);
+    /// ```
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    /// Return the maximum number of key-value pairs the cache can hold.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache: LruCache<isize, &str> = LruCache::new(2);
+    /// assert_eq!(cache.cap(), 2);
+    /// ```
+    pub fn cap(&self) -> usize {
+        self.cap
+    }
+
+    fn detach(&mut self, node: *mut LruEntry<K, V>) {
+        unsafe {
+            (*(*node).prev).next = (*node).next;
+            (*(*node).next).prev = (*node).prev;
+        }
+    }
+
+    #[inline]
+    fn attach(&mut self, node: *mut LruEntry<K, V>) {
+        unsafe {
+            (*node).next = (*self.head).next;
+            (*node).prev = self.head;
+            (*self.head).next = node;
+            (*(*node).next).prev = node;
+        }
+    }
+}
+
+impl<K, V> Drop for LruCache<K, V> {
+    fn drop(&mut self) {
+        // Prevent compiler from trying to drop the un-initialized fields key and val in head
+        // and tail
+        unsafe {
+            let head = Box::from_raw(self.head);
+            let tail = Box::from_raw(self.tail);
+
+            // presently the only way to destructure a box is with the experimental box
+            // pattern syntax
+            let box internal_head = head;
+            let box internal_tail = tail;
+
+            let LruEntry { next: _, prev: _, key: head_key, val: head_val } = internal_head;
+            let LruEntry { next: _, prev: _, key: tail_key, val: tail_val } = internal_tail;
+
+            mem::forget(head_key);
+            mem::forget(head_val);
+            mem::forget(tail_key);
+            mem::forget(tail_val);
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::LRU;
+    use std::fmt::Debug;
+    use super::LruCache;
+
+    fn assert_opt_eq<V: PartialEq + Debug>(opt: Option<&V>, v: V) {
+        assert!(opt.is_some());
+        assert_eq!(opt.unwrap(), &v);
+    }
 
     #[test]
-    fn it_works() {
-        let mut lru = LRU::new(4);
+    fn test_put_and_get() {
+        let mut cache: LruCache<String, String> = LruCache::new(2);
 
-        lru.put(1, 100);
+        cache.put("apple".to_string(), "red".to_string());
+        cache.put("banana".to_string(), "yellow".to_string());
 
-        assert_eq!(lru.get(1), Some(&100));
-        assert_eq!(lru.get(2), None);
+        assert_eq!(cache.cap(), 2);
+        assert_eq!(cache.len(), 2);
+        assert_opt_eq(cache.get(&"apple".to_string()), "red".to_string());
+        assert_opt_eq(cache.get(&"banana".to_string()), "yellow".to_string());
+    }
 
-        lru.put(2, 200);
-        lru.put(3, 300);
+    #[test]
+    fn test_put_update() {
+        println!("testing put update");
 
-        assert_eq!(lru.get(1), Some(&100));
-        assert_eq!(lru.get(2), Some(&200));
-        assert_eq!(lru.get(3), Some(&300));
-        assert_eq!(lru.get(4), None);
+        let mut cache = LruCache::new(1);
 
-        lru.put(4, 400);
-        lru.put(5, 500);
+        cache.put("apple".to_string(), "red".to_string());
+        cache.put("apple".to_string(), "green".to_string());
 
-        assert_eq!(lru.get(1), None);
-        assert_eq!(lru.get(2), Some(&200));
-        assert_eq!(lru.get(3), Some(&300));
-        assert_eq!(lru.get(4), Some(&400));
-        assert_eq!(lru.get(5), Some(&500));
+        assert_eq!(cache.len(), 1);
+        assert_opt_eq(cache.get(&"apple".to_string()), "green".to_string());
+    }
+
+    #[test]
+    fn test_remove_oldest() {
+        let mut cache = LruCache::new(2);
+
+        cache.put("apple".to_string(), "red".to_string());
+        cache.put("banana".to_string(), "yellow".to_string());
+        cache.put("pear".to_string(), "green".to_string());
+
+        assert!(cache.get(&"apple".to_string()).is_none());
+        assert_opt_eq(cache.get(&"banana".to_string()), "yellow".to_string());
+        assert_opt_eq(cache.get(&"pear".to_string()), "green".to_string());
+
+        cache.put("banana".to_string(), "green".to_string());
+        cache.put("tomato".to_string(), "red".to_string());
+
+        assert!(cache.get(&"pear".to_string()).is_none());
+        assert_opt_eq(cache.get(&"banana".to_string()), "green".to_string());
+        assert_opt_eq(cache.get(&"tomato".to_string()), "red".to_string());
+    }
+
+    #[test]
+    fn test_remove() {
+        let mut cache = LruCache::new(2);
+
+        cache.put("apple".to_string(), "red".to_string());
+        cache.put("banana".to_string(), "yellow".to_string());
+
+        assert_eq!(cache.len(), 2);
+        assert_opt_eq(cache.get(&"apple".to_string()), "red".to_string());
+        assert_opt_eq(cache.get(&"banana".to_string()), "yellow".to_string());
+
+        let popped = cache.pop(&"apple".to_string());
+        assert!(popped.is_some());
+        assert_eq!(popped.unwrap(), "red".to_string());
+        assert_eq!(cache.len(), 1);
+        assert!(cache.get(&"apple".to_string()).is_none());
+        assert_opt_eq(cache.get(&"banana".to_string()), "yellow".to_string());
     }
 }
