@@ -184,7 +184,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     }
 
     /// Return the value corresponding to the key in the cache or `None` if it is not
-    /// present in the cache.
+    /// present in the cache. Moves the key to the head of the LRU list if it exists.
     ///
     /// # Example
     ///
@@ -207,6 +207,9 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
             None => (None, None),
             Some(node) => {
                 let node_ptr: *mut LruEntry<K, V> = &mut **node;
+                // we need to use node_ptr to get a reference to val here because
+                // detach and attach require a mutable reference to self here which
+                // would be disallowed if we set value equal to &node.val
                 (Some(node_ptr), Some(unsafe { &(*node_ptr).val }))
             }
         };
@@ -220,6 +223,52 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
         }
 
         value
+    }
+
+    /// Return the value corresponding to the key in the cache or `None` if it is not
+    /// present in the cache. Unlike `get`, `peek` does not update the LRU list so key's
+    /// position will be unchanged.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// cache.put(1, "a");
+    /// cache.put(2, "b");
+    ///
+    /// assert_eq!(cache.peek(&1), Some(&"a"));
+    /// assert_eq!(cache.peek(&2), Some(&"b"));
+    /// ```
+    pub fn peek<'a>(&'a self, k: &K) -> Option<&'a V> {
+        let key = KeyRef { k: k };
+        match self.map.get(&key) {
+            None => None,
+            Some(node) => Some(&node.val),
+        }
+    }
+
+    /// Return a bool indicating whether the given key is in the cache. Does not update the
+    /// LRU list.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// cache.put(1, "a");
+    /// cache.put(2, "b");
+    /// cache.put(3, "c");
+    ///
+    /// assert!(!cache.contains(&1));
+    /// assert!(cache.contains(&2));
+    /// assert!(cache.contains(&3));
+    /// ```
+    pub fn contains(&self, k: &K) -> bool {
+        let key = KeyRef { k: k };
+        self.map.contains_key(&key)
     }
 
     /// Remove and return the value corresponding to the key from the cache or
@@ -348,8 +397,6 @@ mod tests {
 
     #[test]
     fn test_put_update() {
-        println!("testing put update");
-
         let mut cache = LruCache::new(1);
 
         cache.put("apple".to_string(), "red".to_string());
@@ -360,7 +407,7 @@ mod tests {
     }
 
     #[test]
-    fn test_remove_oldest() {
+    fn test_put_removes_oldest() {
         let mut cache = LruCache::new(2);
 
         cache.put("apple".to_string(), "red".to_string());
@@ -380,7 +427,37 @@ mod tests {
     }
 
     #[test]
-    fn test_remove() {
+    fn test_peek() {
+        let mut cache: LruCache<String, String> = LruCache::new(2);
+
+        cache.put("apple".to_string(), "red".to_string());
+        cache.put("banana".to_string(), "yellow".to_string());
+
+        assert_opt_eq(cache.peek(&"banana".to_string()), "yellow".to_string());
+        assert_opt_eq(cache.peek(&"apple".to_string()), "red".to_string());
+
+        cache.put("pear".to_string(), "green".to_string());
+
+        assert!(cache.peek(&"apple".to_string()).is_none());
+        assert_opt_eq(cache.peek(&"banana".to_string()), "yellow".to_string());
+        assert_opt_eq(cache.peek(&"pear".to_string()), "green".to_string());
+    }
+
+    #[test]
+    fn test_contains() {
+        let mut cache = LruCache::new(2);
+
+        cache.put("apple".to_string(), "red".to_string());
+        cache.put("banana".to_string(), "yellow".to_string());
+        cache.put("pear".to_string(), "green".to_string());
+
+        assert!(!cache.contains(&"apple".to_string()));
+        assert!(cache.contains(&"banana".to_string()));
+        assert!(cache.contains(&"pear".to_string()));
+    }
+
+    #[test]
+    fn test_pop() {
         let mut cache = LruCache::new(2);
 
         cache.put("apple".to_string(), "red".to_string());
