@@ -115,7 +115,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     /// ```
     pub fn new(cap: usize) -> LruCache<K, V> {
         let mut cache = LruCache {
-            map: HashMap::new(),
+            map: HashMap::with_capacity(cap),
             cap: cap,
             head: unsafe { Box::into_raw(Box::new(mem::uninitialized::<LruEntry<K, V>>())) },
             tail: unsafe { Box::into_raw(Box::new(mem::uninitialized::<LruEntry<K, V>>())) },
