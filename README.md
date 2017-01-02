@@ -8,7 +8,7 @@
 
 [Documentation](https://docs.rs/bloom_filter/)
 
-An implementation of a LRU cache. The cache supports `get`, `put`, and `remove` operations,
+An implementation of a LRU cache. The cache supports `put`, `get`, and `pop` operations,
 all of which are O(1). This crate was heavily influenced by the
 [LRU Cache implementation in an earlier version of Rust's std::collections crate] (https://doc.rust-lang.org/0.12.0/std/collections/lru_cache/struct.LruCache.html).
 
