@@ -1,7 +1,0 @@
-# update Cargo.toml
-# update CHANGELOG
-# commit changes
-git tag -a x.y.z -m "Releasing version x.y.z"
-git push --tags
-cargo package
-cargo publish
