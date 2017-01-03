@@ -6,7 +6,7 @@
 [![docs.rs](https://docs.rs/lru/badge.svg)](https://docs.rs/lru/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://raw.githubusercontent.com/jeromefroe/lru-rs/master/LICENSE)
 
-[Documentation](https://docs.rs/bloom_filter/)
+[Documentation](https://docs.rs/lru/)
 
 An implementation of a LRU cache. The cache supports `put`, `get`, and `pop` operations,
 all of which are O(1). This crate was heavily influenced by the
