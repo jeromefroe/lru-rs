@@ -24,17 +24,17 @@ use lru::LruCache;
 
 fn main() {
         let mut cache = LruCache::new(2);
-        cache.put("apple".to_string(), "red".to_string());
-        cache.put("banana".to_string(), "yellow".to_string());
+        cache.put("apple", "red");
+        cache.put("banana", "yellow");
 
-        assert_eq!(*cache.get(&"apple".to_string()).unwrap(), "red".to_string());
-        assert_eq!(*cache.get(&"banana".to_string()).unwrap(), "yellow".to_string());
-        assert!(cache.get(&"pear".to_string()).is_none());
+        assert_eq!(*cache.get(&"apple").unwrap(), "red");
+        assert_eq!(*cache.get(&"banana").unwrap(), "yellow");
+        assert!(cache.get(&"pear").is_none());
 
-        cache.put("pear".to_string(), "green".to_string());
+        cache.put("pear", "green");
 
-        assert_eq!(*cache.get(&"pear".to_string()).unwrap(), "green".to_string());
-        assert_eq!(*cache.get(&"banana".to_string()).unwrap(), "yellow".to_string());
-        assert!(cache.get(&"apple".to_string()).is_none());
+        assert_eq!(*cache.get(&"pear").unwrap(), "green");
+        assert_eq!(*cache.get(&"banana").unwrap(), "yellow");
+        assert!(cache.get(&"apple").is_none());
 }
 ```

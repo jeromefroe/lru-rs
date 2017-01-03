@@ -33,18 +33,18 @@
 //!
 //! fn main() {
 //!         let mut cache = LruCache::new(2);
-//!         cache.put("apple".to_string(), "red".to_string());
-//!         cache.put("banana".to_string(), "yellow".to_string());
+//!         cache.put("apple", "red");
+//!         cache.put("banana", "yellow");
 //!
-//!         assert_eq!(*cache.get(&"apple".to_string()).unwrap(), "red".to_string());
-//!         assert_eq!(*cache.get(&"banana".to_string()).unwrap(), "yellow".to_string());
-//!         assert!(cache.get(&"pear".to_string()).is_none());
+//!         assert_eq!(*cache.get(&"apple").unwrap(), "red");
+//!         assert_eq!(*cache.get(&"banana").unwrap(), "yellow");
+//!         assert!(cache.get(&"pear").is_none());
 //!
-//!         cache.put("pear".to_string(), "green".to_string());
+//!         cache.put("pear", "green");
 //!
-//!         assert_eq!(*cache.get(&"pear".to_string()).unwrap(), "green".to_string());
-//!         assert_eq!(*cache.get(&"banana".to_string()).unwrap(), "yellow".to_string());
-//!         assert!(cache.get(&"apple".to_string()).is_none());
+//!         assert_eq!(*cache.get(&"pear").unwrap(), "green");
+//!         assert_eq!(*cache.get(&"banana").unwrap(), "yellow");
+//!         assert!(cache.get(&"apple").is_none());
 //! }
 //! ```
 
@@ -386,92 +386,92 @@ mod tests {
     fn test_put_and_get() {
         let mut cache = LruCache::new(2);
 
-        cache.put("apple".to_string(), "red".to_string());
-        cache.put("banana".to_string(), "yellow".to_string());
+        cache.put("apple", "red");
+        cache.put("banana", "yellow");
 
         assert_eq!(cache.cap(), 2);
         assert_eq!(cache.len(), 2);
-        assert_opt_eq(cache.get(&"apple".to_string()), "red".to_string());
-        assert_opt_eq(cache.get(&"banana".to_string()), "yellow".to_string());
+        assert_opt_eq(cache.get(&"apple"), "red");
+        assert_opt_eq(cache.get(&"banana"), "yellow");
     }
 
     #[test]
     fn test_put_update() {
         let mut cache = LruCache::new(1);
 
-        cache.put("apple".to_string(), "red".to_string());
-        cache.put("apple".to_string(), "green".to_string());
+        cache.put("apple", "red");
+        cache.put("apple", "green");
 
         assert_eq!(cache.len(), 1);
-        assert_opt_eq(cache.get(&"apple".to_string()), "green".to_string());
+        assert_opt_eq(cache.get(&"apple"), "green");
     }
 
     #[test]
     fn test_put_removes_oldest() {
         let mut cache = LruCache::new(2);
 
-        cache.put("apple".to_string(), "red".to_string());
-        cache.put("banana".to_string(), "yellow".to_string());
-        cache.put("pear".to_string(), "green".to_string());
+        cache.put("apple", "red");
+        cache.put("banana", "yellow");
+        cache.put("pear", "green");
 
-        assert!(cache.get(&"apple".to_string()).is_none());
-        assert_opt_eq(cache.get(&"banana".to_string()), "yellow".to_string());
-        assert_opt_eq(cache.get(&"pear".to_string()), "green".to_string());
+        assert!(cache.get(&"apple").is_none());
+        assert_opt_eq(cache.get(&"banana"), "yellow");
+        assert_opt_eq(cache.get(&"pear"), "green");
 
-        cache.put("banana".to_string(), "green".to_string());
-        cache.put("tomato".to_string(), "red".to_string());
+        cache.put("banana", "green");
+        cache.put("tomato", "red");
 
-        assert!(cache.get(&"pear".to_string()).is_none());
-        assert_opt_eq(cache.get(&"banana".to_string()), "green".to_string());
-        assert_opt_eq(cache.get(&"tomato".to_string()), "red".to_string());
+        assert!(cache.get(&"pear").is_none());
+        assert_opt_eq(cache.get(&"banana"), "green");
+        assert_opt_eq(cache.get(&"tomato"), "red");
     }
 
     #[test]
     fn test_peek() {
         let mut cache = LruCache::new(2);
 
-        cache.put("apple".to_string(), "red".to_string());
-        cache.put("banana".to_string(), "yellow".to_string());
+        cache.put("apple", "red");
+        cache.put("banana", "yellow");
 
-        assert_opt_eq(cache.peek(&"banana".to_string()), "yellow".to_string());
-        assert_opt_eq(cache.peek(&"apple".to_string()), "red".to_string());
+        assert_opt_eq(cache.peek(&"banana"), "yellow");
+        assert_opt_eq(cache.peek(&"apple"), "red");
 
-        cache.put("pear".to_string(), "green".to_string());
+        cache.put("pear", "green");
 
-        assert!(cache.peek(&"apple".to_string()).is_none());
-        assert_opt_eq(cache.peek(&"banana".to_string()), "yellow".to_string());
-        assert_opt_eq(cache.peek(&"pear".to_string()), "green".to_string());
+        assert!(cache.peek(&"apple").is_none());
+        assert_opt_eq(cache.peek(&"banana"), "yellow");
+        assert_opt_eq(cache.peek(&"pear"), "green");
     }
 
     #[test]
     fn test_contains() {
         let mut cache = LruCache::new(2);
 
-        cache.put("apple".to_string(), "red".to_string());
-        cache.put("banana".to_string(), "yellow".to_string());
-        cache.put("pear".to_string(), "green".to_string());
+        cache.put("apple", "red");
+        cache.put("banana", "yellow");
+        cache.put("pear", "green");
 
-        assert!(!cache.contains(&"apple".to_string()));
-        assert!(cache.contains(&"banana".to_string()));
-        assert!(cache.contains(&"pear".to_string()));
+        assert!(!cache.contains(&"apple"));
+        assert!(cache.contains(&"banana"));
+        assert!(cache.contains(&"pear"));
     }
 
     #[test]
     fn test_pop() {
         let mut cache = LruCache::new(2);
 
-        cache.put("apple".to_string(), "red".to_string());
-        cache.put("banana".to_string(), "yellow".to_string());
+        cache.put("apple", "red");
+        cache.put("banana", "yellow");
 
         assert_eq!(cache.len(), 2);
-        assert_opt_eq(cache.get(&"apple".to_string()), "red".to_string());
-        assert_opt_eq(cache.get(&"banana".to_string()), "yellow".to_string());
+        assert_opt_eq(cache.get(&"apple"), "red");
+        assert_opt_eq(cache.get(&"banana"), "yellow");
 
-        let popped = cache.pop(&"apple".to_string());
+        let popped = cache.pop(&"apple");
         assert!(popped.is_some());
-        assert_eq!(popped.unwrap(), "red".to_string());
+        assert_eq!(popped.unwrap(), "red");
         assert_eq!(cache.len(), 1);
-        assert!(cache.get(&"apple".to_string()).is_none());
-        assert_opt_eq(cache.get(&"banana".to_string()), "yellow".to_string());
+        assert!(cache.get(&"apple").is_none());
+        assert_opt_eq(cache.get(&"banana"), "yellow");
     }
 }
