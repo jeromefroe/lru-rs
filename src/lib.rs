@@ -384,7 +384,7 @@ mod tests {
 
     #[test]
     fn test_put_and_get() {
-        let mut cache: LruCache<String, String> = LruCache::new(2);
+        let mut cache = LruCache::new(2);
 
         cache.put("apple".to_string(), "red".to_string());
         cache.put("banana".to_string(), "yellow".to_string());
@@ -428,7 +428,7 @@ mod tests {
 
     #[test]
     fn test_peek() {
-        let mut cache: LruCache<String, String> = LruCache::new(2);
+        let mut cache = LruCache::new(2);
 
         cache.put("apple".to_string(), "red".to_string());
         cache.put("banana".to_string(), "yellow".to_string());
