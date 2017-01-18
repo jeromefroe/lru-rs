@@ -351,11 +351,8 @@ impl<K, V> Drop for LruCache<K, V> {
         // Prevent compiler from trying to drop the un-initialized fields key and val in head
         // and tail
         unsafe {
-            let head_box = Box::from_raw(self.head);
-            let tail_box = Box::from_raw(self.tail);
-
-            let head = *head_box;
-            let tail = *tail_box;
+            let head = *Box::from_raw(self.head);
+            let tail = *Box::from_raw(self.tail);
 
             let LruEntry { next: _, prev: _, key: head_key, val: head_val } = head;
             let LruEntry { next: _, prev: _, key: tail_key, val: tail_val } = tail;
