@@ -10,6 +10,8 @@ addons:
 
 rust:
   - nightly
+  - beta
+  - stable
 
 before_script:
   - |
