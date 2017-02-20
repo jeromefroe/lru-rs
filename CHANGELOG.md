@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.1.4](https://github.com/jeromefroe/lru-rs/tree/0.1.4) - 2017-02-19
+
+* Add function to clear the contents of the cache.
+
 ## [v0.1.3](https://github.com/jeromefroe/lru-rs/tree/0.1.3) - 2017-01-02
 
 * Create internal hashmap with specified capacity.

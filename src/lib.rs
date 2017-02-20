@@ -328,6 +328,39 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
         self.cap
     }
 
+    /// Clear the contents of the cache.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache: LruCache<isize, &str> = LruCache::new(2);
+    /// assert_eq!(cache.len(), 0);
+    ///
+    /// cache.put(1, "a");
+    /// assert_eq!(cache.len(), 1);
+    ///
+    /// cache.put(2, "b");
+    /// assert_eq!(cache.len(), 2);
+    ///
+    /// cache.clear();
+    /// assert_eq!(cache.len(), 0);
+    /// ```
+    pub fn clear(&mut self) {
+        loop {
+            let prev;
+            unsafe { prev = (*self.tail).prev }
+            if prev != self.head {
+                let old_key = KeyRef { k: unsafe { &(*(*self.tail).prev).key } };
+                let mut old_node = self.map.remove(&old_key).unwrap();
+                let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
+                self.detach(node_ptr);
+            } else {
+                break;
+            }
+        }
+    }
+
     fn detach(&mut self, node: *mut LruEntry<K, V>) {
         unsafe {
             (*(*node).prev).next = (*node).next;
@@ -466,5 +499,20 @@ mod tests {
         assert_eq!(cache.len(), 1);
         assert!(cache.get(&"apple").is_none());
         assert_opt_eq(cache.get(&"banana"), "yellow");
+    }
+
+    #[test]
+    fn test_clear() {
+        let mut cache = LruCache::new(2);
+
+        cache.put("apple", "red");
+        cache.put("banana", "yellow");
+
+        assert_eq!(cache.len(), 2);
+        assert_opt_eq(cache.get(&"apple"), "red");
+        assert_opt_eq(cache.get(&"banana"), "yellow");
+
+        cache.clear();
+        assert_eq!(cache.len(), 0);
     }
 }
