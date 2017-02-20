@@ -28,7 +28,7 @@ after_success:
   # for the time being so we need to use the latter command
   # see https://github.com/huonw/travis-cargo/issues/58 for more details
   - travis-cargo coveralls --no-sudo --verify
-  - ./kcov/build/src/kcov --verify --debug=15 --coveralls-id=$TRAVIS_JOB_ID --exclude-pattern=/.cargo target/kcov target/debug/lru-*
+  - ./kcov/build/src/kcov --verify --coveralls-id=$TRAVIS_JOB_ID --exclude-pattern=/.cargo target/kcov target/debug/lru-*
 
 env:
   global:
