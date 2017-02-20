@@ -48,8 +48,6 @@
 //! }
 //! ```
 
-#![feature(box_patterns)]
-
 use std::mem;
 use std::ptr;
 use std::hash::{Hash, Hasher};
@@ -353,16 +351,11 @@ impl<K, V> Drop for LruCache<K, V> {
         // Prevent compiler from trying to drop the un-initialized fields key and val in head
         // and tail
         unsafe {
-            let head = Box::from_raw(self.head);
-            let tail = Box::from_raw(self.tail);
+            let head = *Box::from_raw(self.head);
+            let tail = *Box::from_raw(self.tail);
 
-            // presently the only way to destructure a box is with the experimental box
-            // pattern syntax
-            let box internal_head = head;
-            let box internal_tail = tail;
-
-            let LruEntry { next: _, prev: _, key: head_key, val: head_val } = internal_head;
-            let LruEntry { next: _, prev: _, key: tail_key, val: tail_val } = internal_tail;
+            let LruEntry { next: _, prev: _, key: head_key, val: head_val } = head;
+            let LruEntry { next: _, prev: _, key: tail_key, val: tail_val } = tail;
 
             mem::forget(head_key);
             mem::forget(head_val);
