@@ -11,24 +11,17 @@ addons:
       - libcurl4-openssl-dev
       - libelf-dev
       - libdw-dev
-      - cmake
-      - gcc
       - binutils-dev
+    sources:
+      - kalakris-cmake
+
+before_script:
+  - cargo install cargo-travis
+  - export PATH=$HOME/.cargo/bin:$PATH
 
 script:
   - cargo build --verbose
   - cargo test --verbose
 
-after_success: |
-  wget https://github.com/SimonKagstrom/kcov/archive/master.tar.gz &&
-  tar xzf master.tar.gz &&
-  cd kcov-master &&
-  mkdir build &&
-  cd build &&
-  cmake .. &&
-  make &&
-  sudo make install &&
-  cd ../.. &&
-  rm -rf kcov-master &&
-  kcov --verify --coveralls-id=$TRAVIS_JOB_ID --exclude-pattern=/.cargo target/kcov target/debug/lru-* &&
-  echo "Uploaded code coverage"
+after_success:
+  - cargo coveralls
