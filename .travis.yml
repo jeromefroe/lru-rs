@@ -5,11 +5,6 @@ rust:
   - beta
   - stable
 
-env:
-  global:
-    # override the default `--features unstable` used for the nightly branch (optional)
-    - TRAVIS_CARGO_NIGHTLY_FEATURE=nightly
-
 addons:
   apt:
     packages:
@@ -19,16 +14,10 @@ addons:
       - cmake
       - gcc
       - binutils-dev
-      - libiberty-dev
-      - zlib1g-dev
-
-before_script:
-  - pip install 'travis-cargo' --user
-  - export PATH=$HOME/.local/bin:$PATH
 
 script:
-  - travis-cargo build
-  - travis-cargo test
+  - cargo build --verbose
+  - cargo test --verbose
 
 after_success: |
   wget https://github.com/SimonKagstrom/kcov/archive/master.tar.gz &&
@@ -43,8 +32,3 @@ after_success: |
   rm -rf kcov-master &&
   kcov --verify --coveralls-id=$TRAVIS_JOB_ID --exclude-pattern=/.cargo target/kcov target/debug/lru-* &&
   echo "Uploaded code coverage"
-
-env:
-  global:
-    # override the default `--features unstable` used for the nightly branch (optional)
-    - TRAVIS_CARGO_NIGHTLY_FEATURE=nightly
