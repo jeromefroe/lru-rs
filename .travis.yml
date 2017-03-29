@@ -31,7 +31,7 @@ script:
   - travis-cargo test
 
 after_success:
-  - kcov --verify --coveralls-id=$TRAVIS_JOB_ID --exclude-pattern=/.cargo target/kcov target/debug/lru-*
+  - kcov --coveralls-id=$TRAVIS_JOB_ID --exclude-pattern=/.cargo target/kcov target/debug/lru-*
 
 env:
   global:
