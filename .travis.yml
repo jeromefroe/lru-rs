@@ -1,6 +1,3 @@
-# Use containers
-sudo: false
-
 language: rust
 
 rust:
@@ -19,6 +16,8 @@ addons:
       - libcurl4-openssl-dev
       - libelf-dev
       - libdw-dev
+      - cmake
+      - gcc
       - binutils-dev
 
 before_script:
