@@ -20,7 +20,6 @@ addons:
       - libelf-dev
       - libdw-dev
       - binutils-dev
-      - kcov
 
 before_script:
   - pip install 'travis-cargo' --user
@@ -30,8 +29,19 @@ script:
   - travis-cargo build
   - travis-cargo test
 
-after_success:
-  - kcov --coveralls-id=$TRAVIS_JOB_ID --exclude-pattern=/.cargo target/kcov target/debug/lru-*
+after_success: |
+  wget https://github.com/SimonKagstrom/kcov/archive/master.tar.gz &&
+  tar xzf master.tar.gz &&
+  cd kcov-master &&
+  mkdir build &&
+  cd build &&
+  cmake .. &&
+  make &&
+  sudo make install &&
+  cd ../.. &&
+  rm -rf kcov-master &&
+  kcov --coveralls-id=$TRAVIS_JOB_ID --exclude-pattern=/.cargo target/kcov target/debug/lru-* &&
+  echo "Uploaded code coverage"
 
 env:
   global:
