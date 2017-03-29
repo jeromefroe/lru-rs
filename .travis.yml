@@ -19,6 +19,8 @@ addons:
       - cmake
       - gcc
       - binutils-dev
+      - libiberty-dev
+      - zlib1g-dev
 
 before_script:
   - pip install 'travis-cargo' --user
@@ -39,7 +41,7 @@ after_success: |
   sudo make install &&
   cd ../.. &&
   rm -rf kcov-master &&
-  kcov --coveralls-id=$TRAVIS_JOB_ID --exclude-pattern=/.cargo target/kcov target/debug/lru-* &&
+  kcov --verify --coveralls-id=$TRAVIS_JOB_ID --exclude-pattern=/.cargo target/kcov target/debug/lru-* &&
   echo "Uploaded code coverage"
 
 env:
