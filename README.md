@@ -1,7 +1,7 @@
 # LRU Cache
 
 [![Build Status](https://travis-ci.org/jeromefroe/lru-rs.svg?branch=master)](https://travis-ci.org/jeromefroe/lru-rs)
-[![Coverage Status](https://coveralls.io/repos/github/jeromefroe/lru-rs/badge.svg?branch=master)](https://coveralls.io/github/jeromefroe/lru-rs?branch=master)
+[![codecov](https://codecov.io/gh/jeromefroe/lru-rs/branch/master/graph/badge.svg)](https://codecov.io/gh/jeromefroe/lru-rs)
 [![crates.io](https://img.shields.io/crates/v/lru.svg)](https://crates.io/crates/lru/)
 [![docs.rs](https://docs.rs/lru/badge.svg)](https://docs.rs/lru/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://raw.githubusercontent.com/jeromefroe/lru-rs/master/LICENSE)
