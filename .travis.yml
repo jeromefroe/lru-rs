@@ -1,9 +1,19 @@
+dist: trusty
 language: rust
+sudo: false
 
-rust:
-  - nightly
-  - beta
-  - stable
+matrix:
+  include:
+      - rust: nightly
+        env: FEATURES="--features nightly"
+      - rust: beta
+      - rust: stable
+
+cache:
+    apt: true
+    directories:
+        - target/debug/deps
+        - target/debug/build
 
 addons:
   apt:
@@ -11,24 +21,22 @@ addons:
       - libcurl4-openssl-dev
       - libelf-dev
       - libdw-dev
-      - cmake
-      - gcc
       - binutils-dev
+      - libiberty-dev
 
-script:
-  - cargo build --verbose
-  - cargo test --verbose
 
-after_success: |
-  wget https://github.com/SimonKagstrom/kcov/archive/master.tar.gz &&
-  tar xzf master.tar.gz &&
-  cd kcov-master &&
-  mkdir build &&
-  cd build &&
-  cmake .. &&
-  make &&
-  sudo make install &&
-  cd ../.. &&
-  rm -rf kcov-master &&
-  kcov --verify --coveralls-id=$TRAVIS_JOB_ID --exclude-pattern=/.cargo target/kcov target/debug/lru-* &&
-  echo "Uploaded code coverage"
+after_success:
+  - '[ $TRAVIS_RUST_VERSION = stable ] &&
+    LOCAL="~/.local" && export PATH=$LOCAL/bin:$PATH &&
+    wget https://github.com/SimonKagstrom/kcov/archive/master.tar.gz &&
+    tar xzf master.tar.gz && mkdir kcov-master/build && cd kcov-master/build &&
+    cmake -DCMAKE_INSTALL_PREFIX:PATH=$LOCAL .. && make && make install && cd ../.. &&
+    ls target/debug &&
+    RUSTFLAGS="-C link-dead-code" cargo test --no-run &&
+    for file in target/debug/lru-*; do
+      if [[ -x $file ]]; then
+        mkdir -p "target/cov/$(basename $file)";
+        kcov --exclude-pattern=/.cargo,/usr/lib --verify "target/cov/$(basename $file)" "$file";
+      fi;
+    done &&
+    kcov --coveralls-id=$TRAVIS_JOB_ID --merge target/cov target/cov/*'
