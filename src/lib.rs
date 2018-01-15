@@ -377,6 +377,62 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
         self.cap
     }
 
+    /// Resizes the cache. If the new capacity is smaller than the size of the current
+    /// cache any entries past the new capacity are discarded.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache: LruCache<isize, &str> = LruCache::new(2);
+    ///
+    /// cache.put(1, "a");
+    /// cache.put(2, "b");
+    /// cache.resize(4);
+    /// cache.put(3, "c");
+    /// cache.put(4, "d");
+    ///
+    /// assert_eq!(cache.len(), 4);
+    /// assert_eq!(cache.get(&1), Some(&"a"));
+    /// assert_eq!(cache.get(&2), Some(&"b"));
+    /// assert_eq!(cache.get(&3), Some(&"c"));
+    /// assert_eq!(cache.get(&4), Some(&"d"));
+    /// ```
+    pub fn resize(&mut self, cap: usize) {
+        // return early if capacity doesn't change
+        if cap == self.cap {
+            return;
+        }
+
+        let mut new_map: HashMap<KeyRef<K>, Box<LruEntry<K, V>>> = HashMap::with_capacity(cap);
+
+        let mut current;
+        unsafe { current = (*self.head).next };
+        while current != self.tail {
+            if new_map.len() < cap {
+                let key = unsafe { &(*current).key };
+                let keyref = KeyRef { k: key };
+
+                // remove node from old map so its destructor isn't run
+                let node = self.map.remove(&keyref).unwrap();
+                new_map.insert(keyref, node);
+
+                unsafe { current = (*current).next }
+            } else {
+                // we are at max capacity so we can just update the tail and break
+                self.detach(current);
+                unsafe {
+                    (*(*current).prev).next = self.tail;
+                    self.tail = (*current).prev;
+                }
+                break;
+            }
+        }
+
+        self.map = new_map;
+        self.cap = cap;
+    }
+
     /// Clears the contents of the cache.
     ///
     /// # Example
@@ -417,7 +473,6 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
         }
     }
 
-    #[inline]
     fn attach(&mut self, node: *mut LruEntry<K, V>) {
         unsafe {
             (*node).next = (*self.head).next;
@@ -599,5 +654,40 @@ mod tests {
 
         cache.clear();
         assert_eq!(cache.len(), 0);
+    }
+
+    #[test]
+    fn test_resize_larger() {
+        let mut cache = LruCache::new(2);
+
+        cache.put(1, "a");
+        cache.put(2, "b");
+        cache.resize(4);
+        cache.put(3, "c");
+        cache.put(4, "d");
+
+        assert_eq!(cache.len(), 4);
+        assert_eq!(cache.get(&1), Some(&"a"));
+        assert_eq!(cache.get(&2), Some(&"b"));
+        assert_eq!(cache.get(&3), Some(&"c"));
+        assert_eq!(cache.get(&4), Some(&"d"));
+    }
+
+    #[test]
+    fn test_resize_smaller() {
+        let mut cache = LruCache::new(4);
+
+        cache.put(1, "a");
+        cache.put(2, "b");
+        cache.put(3, "c");
+        cache.put(4, "d");
+
+        cache.resize(2);
+
+        assert_eq!(cache.len(), 2);
+        assert!(cache.get(&1).is_none());
+        assert!(cache.get(&2).is_none());
+        assert_eq!(cache.get(&3), Some(&"c"));
+        assert_eq!(cache.get(&4), Some(&"d"));
     }
 }
