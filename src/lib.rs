@@ -20,9 +20,9 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-//! An implementation of a LRU cache. The cache supports `get`, `put`, and `remove`
-//! operations, all of which are O(1). This crate was heavily influenced by the
-//! [LRU Cache implementation in an earlier version of Rust's std::collections crate] (https://doc.rust-lang.org/0.12.0/std/collections/lru_cache/struct.LruCache.html).
+//! An implementation of a LRU cache. The cache supports `get`, `get_mut`, `put`,
+//! and `remove` operations, all of which are O(1). This crate was heavily influenced
+//! by the [LRU Cache implementation in an earlier version of Rust's std::collections crate] (https://doc.rust-lang.org/0.12.0/std/collections/lru_cache/struct.LruCache.html).
 //!
 //! ## Example
 //!
@@ -33,18 +33,25 @@
 //!
 //! fn main() {
 //!         let mut cache = LruCache::new(2);
-//!         cache.put("apple", "red");
-//!         cache.put("banana", "yellow");
+//!         cache.put("apple", 3);
+//!         cache.put("banana", 2);
 //!
-//!         assert_eq!(*cache.get(&"apple").unwrap(), "red");
-//!         assert_eq!(*cache.get(&"banana").unwrap(), "yellow");
+//!         assert_eq!(*cache.get(&"apple").unwrap(), 3);
+//!         assert_eq!(*cache.get(&"banana").unwrap(), 2);
 //!         assert!(cache.get(&"pear").is_none());
 //!
-//!         cache.put("pear", "green");
+//!         cache.put("pear", 4);
 //!
-//!         assert_eq!(*cache.get(&"pear").unwrap(), "green");
-//!         assert_eq!(*cache.get(&"banana").unwrap(), "yellow");
+//!         assert_eq!(*cache.get(&"pear").unwrap(), 4);
+//!         assert_eq!(*cache.get(&"banana").unwrap(), 2);
 //!         assert!(cache.get(&"apple").is_none());
+//!
+//!         {
+//!             let v = cache.get_mut(&"banana").unwrap();
+//!             *v = 6;
+//!         }
+//!
+//!         assert_eq!(*cache.get(&"banana").unwrap(), 6);
 //! }
 //! ```
 
@@ -103,7 +110,7 @@ pub struct LruCache<K, V> {
 }
 
 impl<K: Hash + Eq, V> LruCache<K, V> {
-    /// Create a new LRU Cache that holds at most `cap` items.
+    /// Creates a new LRU Cache that holds at most `cap` items.
     ///
     /// # Example
     ///
@@ -127,7 +134,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
         cache
     }
 
-    /// Put a key-value pair into cache. If the key already exists update its value.
+    /// Puts a key-value pair into cache. If the key already exists it updates its value.
     ///
     /// # Example
     ///
@@ -181,7 +188,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
         }
     }
 
-    /// Return the value corresponding to the key in the cache or `None` if it is not
+    /// Returns a reference to the value of the key in the cache or `None` if it is not
     /// present in the cache. Moves the key to the head of the LRU list if it exists.
     ///
     /// # Example
@@ -223,9 +230,51 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
         value
     }
 
-    /// Return the value corresponding to the key in the cache or `None` if it is not
-    /// present in the cache. Unlike `get`, `peek` does not update the LRU list so key's
-    /// position will be unchanged.
+    /// Returns a mutable reference to the value of the key in the cache or `None` if it
+    /// is not present in the cache. Moves the key to the head of the LRU list if it exists.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// cache.put("apple", 8);
+    /// cache.put("banana", 4);
+    /// cache.put("banana", 6);
+    /// cache.put("pear", 2);
+    ///
+    /// assert_eq!(cache.get_mut(&"apple"), None);
+    /// assert_eq!(cache.get_mut(&"banana"), Some(&mut 6));
+    /// assert_eq!(cache.get_mut(&"pear"), Some(&mut 2));
+    /// ```
+    pub fn get_mut<'a>(&'a mut self, k: &K) -> Option<&'a mut V> {
+        let key = KeyRef { k: k };
+        let (node_ptr, value) = match self.map.get_mut(&key) {
+            None => (None, None),
+            Some(node) => {
+                let node_ptr: *mut LruEntry<K, V> = &mut **node;
+                // we need to use node_ptr to get a reference to val here because
+                // detach and attach require a mutable reference to self here which
+                // would be disallowed if we set value equal to &node.val
+                (Some(node_ptr), Some(unsafe { &mut (*node_ptr).val }))
+            }
+        };
+
+        match node_ptr {
+            None => (),
+            Some(node_ptr) => {
+                self.detach(node_ptr);
+                self.attach(node_ptr);
+            }
+        }
+
+        value
+    }
+
+    /// Returns the value corresponding to the key in the cache or `None` if it is not
+    /// present in the cache. Unlike `get`, `peek` does not update the LRU list so the
+    /// key's position will be unchanged.
     ///
     /// # Example
     ///
@@ -247,7 +296,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
         }
     }
 
-    /// Return a bool indicating whether the given key is in the cache. Does not update the
+    /// Returns a bool indicating whether the given key is in the cache. Does not update the
     /// LRU list.
     ///
     /// # Example
@@ -269,7 +318,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
         self.map.contains_key(&key)
     }
 
-    /// Remove and return the value corresponding to the key from the cache or
+    /// Removes and returns the value corresponding to the key from the cache or
     /// `None` if it does not exist.
     ///
     /// # Example
@@ -293,7 +342,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
         }
     }
 
-    /// Return the number of key-value pairs that are currently in the the cache.
+    /// Returns the number of key-value pairs that are currently in the the cache.
     ///
     /// # Example
     ///
@@ -315,7 +364,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
         self.map.len()
     }
 
-    /// Return the maximum number of key-value pairs the cache can hold.
+    /// Returns the maximum number of key-value pairs the cache can hold.
     ///
     /// # Example
     ///
@@ -328,7 +377,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
         self.cap
     }
 
-    /// Clear the contents of the cache.
+    /// Clears the contents of the cache.
     ///
     /// # Example
     ///
@@ -408,6 +457,11 @@ mod tests {
         assert_eq!(opt.unwrap(), &v);
     }
 
+    fn assert_opt_eq_mut<V: PartialEq + Debug>(opt: Option<&mut V>, v: V) {
+        assert!(opt.is_some());
+        assert_eq!(opt.unwrap(), &v);
+    }
+
     #[test]
     fn test_put_and_get() {
         let mut cache = LruCache::new(2);
@@ -419,6 +473,37 @@ mod tests {
         assert_eq!(cache.len(), 2);
         assert_opt_eq(cache.get(&"apple"), "red");
         assert_opt_eq(cache.get(&"banana"), "yellow");
+    }
+
+    #[test]
+    fn test_put_and_get_mut() {
+        let mut cache = LruCache::new(2);
+
+        cache.put("apple", "red");
+        cache.put("banana", "yellow");
+
+        assert_eq!(cache.cap(), 2);
+        assert_eq!(cache.len(), 2);
+        assert_opt_eq_mut(cache.get_mut(&"apple"), "red");
+        assert_opt_eq_mut(cache.get_mut(&"banana"), "yellow");
+    }
+
+    #[test]
+    fn test_get_mut_and_update() {
+        let mut cache = LruCache::new(2);
+
+        cache.put("apple", 1);
+        cache.put("banana", 3);
+
+        {
+            let v = cache.get_mut(&"apple").unwrap();
+            *v = 4;
+        }
+
+        assert_eq!(cache.cap(), 2);
+        assert_eq!(cache.len(), 2);
+        assert_opt_eq_mut(cache.get_mut(&"apple"), 4);
+        assert_opt_eq_mut(cache.get_mut(&"banana"), 3);
     }
 
     #[test]
