@@ -55,6 +55,9 @@
 //! }
 //! ```
 
+#[cfg(test)]
+extern crate scoped_threadpool;
+
 use std::mem;
 use std::ptr;
 use std::hash::{Hash, Hasher};
@@ -119,7 +122,9 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     /// let mut cache: LruCache<isize, &str> = LruCache::new(10);
     /// ```
     pub fn new(cap: usize) -> LruCache<K, V> {
-        let mut cache = LruCache {
+        // NB: The compiler warns that cache does not need to be marked as mutable if we
+        // declare it as such since we only mutate it inside the unsafe block.
+        let cache = LruCache {
             map: HashMap::with_capacity(cap),
             cap: cap,
             head: unsafe { Box::into_raw(Box::new(mem::uninitialized::<LruEntry<K, V>>())) },
@@ -164,7 +169,9 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
             None => {
                 let mut node = if self.len() == self.cap() {
                     // if the cache is full, remove the last entry so we can use it for the new key
-                    let old_key = KeyRef { k: unsafe { &(*(*self.tail).prev).key } };
+                    let old_key = KeyRef {
+                        k: unsafe { &(*(*self.tail).prev).key },
+                    };
                     let mut old_node = self.map.remove(&old_key).unwrap();
 
                     old_node.key = k;
@@ -456,7 +463,9 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
             let prev;
             unsafe { prev = (*self.tail).prev }
             if prev != self.head {
-                let old_key = KeyRef { k: unsafe { &(*(*self.tail).prev).key } };
+                let old_key = KeyRef {
+                    k: unsafe { &(*(*self.tail).prev).key },
+                };
                 let mut old_node = self.map.remove(&old_key).unwrap();
                 let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
                 self.detach(node_ptr);
@@ -491,8 +500,18 @@ impl<K, V> Drop for LruCache<K, V> {
             let head = *Box::from_raw(self.head);
             let tail = *Box::from_raw(self.tail);
 
-            let LruEntry { next: _, prev: _, key: head_key, val: head_val } = head;
-            let LruEntry { next: _, prev: _, key: tail_key, val: tail_val } = tail;
+            let LruEntry {
+                next: _,
+                prev: _,
+                key: head_key,
+                val: head_val,
+            } = head;
+            let LruEntry {
+                next: _,
+                prev: _,
+                key: tail_key,
+                val: tail_val,
+            } = tail;
 
             mem::forget(head_key);
             mem::forget(head_val);
@@ -502,10 +521,17 @@ impl<K, V> Drop for LruCache<K, V> {
     }
 }
 
+// The compiler does not automatically derive Send and Sync for LruCache because it contains
+// raw pointers. The raw pointers are safely encapsulated by LruCache though so we can
+// implement Send and Sync for it below.
+unsafe impl<K: Sync + Send, V: Sync + Send> Send for LruCache<K, V> {}
+unsafe impl<K: Sync + Send, V: Sync + Send> Sync for LruCache<K, V> {}
+
 #[cfg(test)]
 mod tests {
     use std::fmt::Debug;
     use super::LruCache;
+    use scoped_threadpool::Pool;
 
     fn assert_opt_eq<V: PartialEq + Debug>(opt: Option<&V>, v: V) {
         assert!(opt.is_some());
@@ -689,5 +715,35 @@ mod tests {
         assert!(cache.get(&2).is_none());
         assert_eq!(cache.get(&3), Some(&"c"));
         assert_eq!(cache.get(&4), Some(&"d"));
+    }
+
+    #[test]
+    fn test_send() {
+        use std::thread;
+
+        let mut cache = LruCache::new(4);
+        cache.put(1, "a");
+
+        let handle = thread::spawn(move || {
+            assert_eq!(cache.get(&1), Some(&"a"));
+        });
+
+        assert!(handle.join().is_ok());
+    }
+
+    #[test]
+    fn test_sync() {
+        let mut pool = Pool::new(1);
+        let mut cache = LruCache::new(4);
+        cache.put(1, "a");
+
+        let cache_ref = &cache;
+        pool.scoped(|scoped| {
+            scoped.execute(move || {
+                assert_eq!(cache_ref.peek(&1), Some(&"a"));
+            });
+        });
+
+        assert_eq!((cache_ref).peek(&1), Some(&"a"));
     }
 }
