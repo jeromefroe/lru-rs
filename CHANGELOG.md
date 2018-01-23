@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.1.7](https://github.com/jeromefroe/lru-rs/tree/0.1.7) - 2018-01-22
+
+* Implement `Send` and `Sync` for the cache.
+
 ## [v0.1.6](https://github.com/jeromefroe/lru-rs/tree/0.1.6) - 2018-01-15
 
 * Add `resize` method to dynamically resize the cache.
