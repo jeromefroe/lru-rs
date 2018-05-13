@@ -58,10 +58,10 @@
 #[cfg(test)]
 extern crate scoped_threadpool;
 
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::mem;
 use std::ptr;
-use std::hash::{Hash, Hasher};
-use std::collections::HashMap;
 
 // Struct used to hold a reference to a key
 struct KeyRef<K> {
@@ -529,9 +529,9 @@ unsafe impl<K: Sync + Send, V: Sync + Send> Sync for LruCache<K, V> {}
 
 #[cfg(test)]
 mod tests {
-    use std::fmt::Debug;
     use super::LruCache;
     use scoped_threadpool::Pool;
+    use std::fmt::Debug;
 
     fn assert_opt_eq<V: PartialEq + Debug>(opt: Option<&V>, v: V) {
         assert!(opt.is_some());

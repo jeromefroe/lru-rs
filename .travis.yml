@@ -1,41 +1,54 @@
-language: rust
 sudo: false
 
-rust:
-  - stable
-  - beta
-  - nightly
-
+language: rust
+cache: cargo
 matrix:
-  allow_failures:
-    - rust: nightly
-
-env:
-  global:
-  - RUSTFLAGS="-C link-dead-code"
-
-addons:
-  apt:
-    packages:
-      - libcurl4-openssl-dev
-      - libelf-dev
-      - libdw-dev
-      - cmake
-      - gcc
-      - binutils-dev
-      - libiberty-dev
-
-after_success: |
-  wget https://github.com/SimonKagstrom/kcov/archive/master.tar.gz &&
-  tar xzf master.tar.gz &&
-  cd kcov-master &&
-  mkdir build &&
-  cd build &&
-  cmake .. &&
-  make &&
-  make install DESTDIR=../../kcov-build &&
-  cd ../.. &&
-  rm -rf kcov-master &&
-  for file in target/debug/lru-*[^\.d]; do mkdir -p "target/cov/$(basename $file)"; ./kcov-build/usr/local/bin/kcov --exclude-pattern=/.cargo,/usr/lib --verify "target/cov/$(basename $file)" "$file"; done &&
-  bash <(curl -s https://codecov.io/bash) &&
-  echo "Uploaded code coverage"
+  fast_finish: true
+  include:
+  - env:
+      - NAME="stable"
+      # Link dead code to improve code coverage.
+      - RUSTFLAGS="-C link-dead-code"
+    rust: stable
+    # Required for code coverage, see Travis issue #9601.
+    sudo: required
+    addons:
+      apt:
+        packages:
+          - libcurl4-openssl-dev
+          - libelf-dev
+          - libdw-dev
+          - cmake
+          - gcc
+          - binutils-dev
+          - libiberty-dev
+    after_success: |
+      wget https://github.com/SimonKagstrom/kcov/archive/master.tar.gz &&
+      tar xzf master.tar.gz &&
+      cd kcov-master &&
+      mkdir build &&
+      cd build &&
+      cmake .. &&
+      make &&
+      make install DESTDIR=../../kcov-build &&
+      cd ../.. &&
+      rm -rf kcov-master &&
+      for file in target/debug/lru-*[^\.d]; do mkdir -p "target/cov/$(basename $file)"; ./kcov-build/usr/local/bin/kcov --exclude-pattern=/.cargo,/usr/lib --verify "target/cov/$(basename $file)" "$file"; done &&
+      bash <(curl -s https://codecov.io/bash) &&
+      echo "Uploaded code coverage"
+  - env: NAME="beta"
+    rust: beta
+  - env: NAME="nightly"
+    rust: nightly
+  - env: NAME="format"
+    rust: nightly
+    install:
+    - rustup component add rustfmt-preview
+    script:
+    - cargo fmt -- --write-mode=check
+  - env: NAME="lint"
+    rust: nightly
+    install:
+    - cargo install clippy || echo clippy already installed
+    script:
+    - cargo clippy
