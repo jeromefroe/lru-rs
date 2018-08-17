@@ -122,23 +122,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     /// use lru::LruCache;
     /// let mut cache: LruCache<isize, &str> = LruCache::new(10);
     /// ```
-    pub fn new(cap: usize) -> LruCache<K, V> {
-        // NB: The compiler warns that cache does not need to be marked as mutable if we
-        // declare it as such since we only mutate it inside the unsafe block.
-        let cache = LruCache {
-            map: HashMap::with_capacity(cap),
-            cap,
-            head: unsafe { Box::into_raw(Box::new(mem::uninitialized::<LruEntry<K, V>>())) },
-            tail: unsafe { Box::into_raw(Box::new(mem::uninitialized::<LruEntry<K, V>>())) },
-        };
-
-        unsafe {
-            (*cache.head).next = cache.tail;
-            (*cache.tail).prev = cache.head;
-        }
-
-        cache
-    }
+    pub fn new(cap: usize) -> LruCache<K, V> { LruCache::construct(Some(cap)) }
 
     /// Creates a new LRU Cache that never automatically evicts items.
     ///
@@ -148,12 +132,20 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     /// use lru::LruCache;
     /// let mut cache: LruCache<isize, &str> = LruCache::unbounded();
     /// ```
-    pub fn unbounded() -> LruCache<K, V> {
+    pub fn unbounded() -> LruCache<K, V> { LruCache::construct(None) }
+
+    /// Creates a new LRU Cache with an optional limit on the number of items.
+    fn construct(cap: Option<usize>) -> LruCache<K, V> {
+        let (cap, map) = match cap {
+            Some(cap) => (cap, HashMap::with_capacity(cap)),
+            None => (usize::MAX, HashMap::default()),
+        };
+
         // NB: The compiler warns that cache does not need to be marked as mutable if we
         // declare it as such since we only mutate it inside the unsafe block.
         let cache = LruCache {
-            map: HashMap::default(),
-            cap: usize::MAX,
+            map,
+            cap,
             head: unsafe { Box::into_raw(Box::new(mem::uninitialized::<LruEntry<K, V>>())) },
             tail: unsafe { Box::into_raw(Box::new(mem::uninitialized::<LruEntry<K, V>>())) },
         };
@@ -397,15 +389,8 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     /// assert_eq!(cache.len(), 0);
     /// ```
     pub fn pop_lru(&mut self) -> Option<(K, V)> {
-        let key = KeyRef {
-            k: unsafe { &(*(*self.tail).prev).key },
-        };
-        let mut node = self.map.remove(&key)?;
-
-        let node_ptr: *mut LruEntry<K, V> = &mut *node;
-        self.detach(node_ptr);
-
-        // Can't destructure directly because of https://github.com/rust-lang/rust/issues/28536
+        let node = self.remove_last()?;
+        // N.B.: Can't destructure directly because of https://github.com/rust-lang/rust/issues/28536
         let node = *node;
         let LruEntry { key, val, .. } = node;
         Some((key, val))
@@ -538,18 +523,26 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     /// ```
     pub fn clear(&mut self) {
         loop {
-            let prev;
-            unsafe { prev = (*self.tail).prev }
-            if prev != self.head {
-                let old_key = KeyRef {
-                    k: unsafe { &(*(*self.tail).prev).key },
-                };
-                let mut old_node = self.map.remove(&old_key).unwrap();
-                let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
-                self.detach(node_ptr);
-            } else {
-                break;
+            match self.remove_last() {
+                Some(_) => (),
+                None => break,
             }
+        }
+    }
+
+    fn remove_last(&mut self) -> Option<Box<LruEntry<K, V>>> {
+        let prev;
+        unsafe { prev = (*self.tail).prev }
+        if prev != self.head {
+            let old_key = KeyRef {
+                k: unsafe { &(*(*self.tail).prev).key },
+            };
+            let mut old_node = self.map.remove(&old_key).unwrap();
+            let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
+            self.detach(node_ptr);
+            Some(old_node)
+        } else {
+            None
         }
     }
 
@@ -617,6 +610,15 @@ mod tests {
     fn assert_opt_eq_mut<V: PartialEq + Debug>(opt: Option<&mut V>, v: V) {
         assert!(opt.is_some());
         assert_eq!(opt.unwrap(), &v);
+    }
+
+    #[test]
+    fn test_unbounded() {
+        let mut cache = LruCache::unbounded();
+        for i in 0..13370 {
+            cache.put(i, ());
+        }
+        assert_eq!(cache.len(), 13370);
     }
 
     #[test]
