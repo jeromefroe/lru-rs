@@ -94,8 +94,8 @@ struct LruEntry<K, V> {
 impl<K, V> LruEntry<K, V> {
     fn new(key: K, val: V) -> Self {
         LruEntry {
-            key: key,
-            val: val,
+            key,
+            val,
             prev: ptr::null_mut(),
             next: ptr::null_mut(),
         }
@@ -126,7 +126,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
         // declare it as such since we only mutate it inside the unsafe block.
         let cache = LruCache {
             map: HashMap::with_capacity(cap),
-            cap: cap,
+            cap,
             head: unsafe { Box::into_raw(Box::new(mem::uninitialized::<LruEntry<K, V>>())) },
             tail: unsafe { Box::into_raw(Box::new(mem::uninitialized::<LruEntry<K, V>>())) },
         };
@@ -214,7 +214,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     /// assert_eq!(cache.get(&3), Some(&"d"));
     /// ```
     pub fn get<'a>(&'a mut self, k: &K) -> Option<&'a V> {
-        let key = KeyRef { k: k };
+        let key = KeyRef { k };
         let (node_ptr, value) = match self.map.get_mut(&key) {
             None => (None, None),
             Some(node) => {
@@ -256,7 +256,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     /// assert_eq!(cache.get_mut(&"pear"), Some(&mut 2));
     /// ```
     pub fn get_mut<'a>(&'a mut self, k: &K) -> Option<&'a mut V> {
-        let key = KeyRef { k: k };
+        let key = KeyRef { k };
         let (node_ptr, value) = match self.map.get_mut(&key) {
             None => (None, None),
             Some(node) => {
@@ -296,7 +296,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     /// assert_eq!(cache.peek(&2), Some(&"b"));
     /// ```
     pub fn peek<'a>(&'a self, k: &K) -> Option<&'a V> {
-        let key = KeyRef { k: k };
+        let key = KeyRef { k };
         match self.map.get(&key) {
             None => None,
             Some(node) => Some(&node.val),
@@ -321,7 +321,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     /// assert!(cache.contains(&3));
     /// ```
     pub fn contains(&self, k: &K) -> bool {
-        let key = KeyRef { k: k };
+        let key = KeyRef { k };
         self.map.contains_key(&key)
     }
 
@@ -342,7 +342,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     /// assert_eq!(cache.len(), 0);
     /// ```
     pub fn pop(&mut self, k: &K) -> Option<V> {
-        let key = KeyRef { k: k };
+        let key = KeyRef { k };
         match self.map.remove(&key) {
             None => None,
             Some(lru_entry) => Some(lru_entry.val),
@@ -369,6 +369,22 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     /// ```
     pub fn len(&self) -> usize {
         self.map.len()
+    }
+
+    /// Returns a bool indicating whether the cache is empty or not.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::new(2);
+    /// assert!(cache.is_empty());
+    ///
+    /// cache.put(1, "a");
+    /// assert!(!cache.is_empty());
+    /// ```
+    pub fn is_empty(&self) -> bool {
+        self.map.len() == 0
     }
 
     /// Returns the maximum number of key-value pairs the cache can hold.
@@ -501,16 +517,14 @@ impl<K, V> Drop for LruCache<K, V> {
             let tail = *Box::from_raw(self.tail);
 
             let LruEntry {
-                next: _,
-                prev: _,
                 key: head_key,
                 val: head_val,
+                ..
             } = head;
             let LruEntry {
-                next: _,
-                prev: _,
                 key: tail_key,
                 val: tail_val,
+                ..
             } = tail;
 
             mem::forget(head_key);
@@ -546,12 +560,14 @@ mod tests {
     #[test]
     fn test_put_and_get() {
         let mut cache = LruCache::new(2);
+        assert!(cache.is_empty());
 
         cache.put("apple", "red");
         cache.put("banana", "yellow");
 
         assert_eq!(cache.cap(), 2);
         assert_eq!(cache.len(), 2);
+        assert!(!cache.is_empty());
         assert_opt_eq(cache.get(&"apple"), "red");
         assert_opt_eq(cache.get(&"banana"), "yellow");
     }
