@@ -122,7 +122,9 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     /// use lru::LruCache;
     /// let mut cache: LruCache<isize, &str> = LruCache::new(10);
     /// ```
-    pub fn new(cap: usize) -> LruCache<K, V> { LruCache::construct(Some(cap)) }
+    pub fn new(cap: usize) -> LruCache<K, V> {
+        LruCache::construct(Some(cap))
+    }
 
     /// Creates a new LRU Cache that never automatically evicts items.
     ///
@@ -132,7 +134,9 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     /// use lru::LruCache;
     /// let mut cache: LruCache<isize, &str> = LruCache::unbounded();
     /// ```
-    pub fn unbounded() -> LruCache<K, V> { LruCache::construct(None) }
+    pub fn unbounded() -> LruCache<K, V> {
+        LruCache::construct(None)
+    }
 
     /// Creates a new LRU Cache with an optional limit on the number of items.
     fn construct(cap: Option<usize>) -> LruCache<K, V> {
@@ -367,7 +371,6 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
             Some(lru_entry) => Some(lru_entry.val),
         }
     }
-
 
     /// Removes and returns the key and value corresponding to the least recently
     /// used item or `None` if the cache is empty.
