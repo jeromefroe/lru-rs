@@ -62,6 +62,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::mem;
 use std::ptr;
+use std::usize;
 
 // Struct used to hold a reference to a key
 struct KeyRef<K> {
@@ -121,11 +122,29 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     /// use lru::LruCache;
     /// let mut cache: LruCache<isize, &str> = LruCache::new(10);
     /// ```
-    pub fn new(cap: usize) -> LruCache<K, V> {
+    pub fn new(cap: usize) -> LruCache<K, V> { LruCache::construct(Some(cap)) }
+
+    /// Creates a new LRU Cache that never automatically evicts items.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache: LruCache<isize, &str> = LruCache::unbounded();
+    /// ```
+    pub fn unbounded() -> LruCache<K, V> { LruCache::construct(None) }
+
+    /// Creates a new LRU Cache with an optional limit on the number of items.
+    fn construct(cap: Option<usize>) -> LruCache<K, V> {
+        let (cap, map) = match cap {
+            Some(cap) => (cap, HashMap::with_capacity(cap)),
+            None => (usize::MAX, HashMap::default()),
+        };
+
         // NB: The compiler warns that cache does not need to be marked as mutable if we
         // declare it as such since we only mutate it inside the unsafe block.
         let cache = LruCache {
-            map: HashMap::with_capacity(cap),
+            map,
             cap,
             head: unsafe { Box::into_raw(Box::new(mem::uninitialized::<LruEntry<K, V>>())) },
             tail: unsafe { Box::into_raw(Box::new(mem::uninitialized::<LruEntry<K, V>>())) },
@@ -349,6 +368,34 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
         }
     }
 
+
+    /// Removes and returns the key and value corresponding to the least recently
+    /// used item or `None` if the cache is empty.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// cache.put(2, "a");
+    /// cache.put(3, "b");
+    /// cache.put(4, "c");
+    /// cache.get(&3);
+    ///
+    /// assert_eq!(cache.pop_lru(), Some((4, "c")));
+    /// assert_eq!(cache.pop_lru(), Some((3, "b")));
+    /// assert_eq!(cache.pop_lru(), None);
+    /// assert_eq!(cache.len(), 0);
+    /// ```
+    pub fn pop_lru(&mut self) -> Option<(K, V)> {
+        let node = self.remove_last()?;
+        // N.B.: Can't destructure directly because of https://github.com/rust-lang/rust/issues/28536
+        let node = *node;
+        let LruEntry { key, val, .. } = node;
+        Some((key, val))
+    }
+
     /// Returns the number of key-value pairs that are currently in the the cache.
     ///
     /// # Example
@@ -476,18 +523,26 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     /// ```
     pub fn clear(&mut self) {
         loop {
-            let prev;
-            unsafe { prev = (*self.tail).prev }
-            if prev != self.head {
-                let old_key = KeyRef {
-                    k: unsafe { &(*(*self.tail).prev).key },
-                };
-                let mut old_node = self.map.remove(&old_key).unwrap();
-                let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
-                self.detach(node_ptr);
-            } else {
-                break;
+            match self.remove_last() {
+                Some(_) => (),
+                None => break,
             }
+        }
+    }
+
+    fn remove_last(&mut self) -> Option<Box<LruEntry<K, V>>> {
+        let prev;
+        unsafe { prev = (*self.tail).prev }
+        if prev != self.head {
+            let old_key = KeyRef {
+                k: unsafe { &(*(*self.tail).prev).key },
+            };
+            let mut old_node = self.map.remove(&old_key).unwrap();
+            let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
+            self.detach(node_ptr);
+            Some(old_node)
+        } else {
+            None
         }
     }
 
@@ -555,6 +610,15 @@ mod tests {
     fn assert_opt_eq_mut<V: PartialEq + Debug>(opt: Option<&mut V>, v: V) {
         assert!(opt.is_some());
         assert_eq!(opt.unwrap(), &v);
+    }
+
+    #[test]
+    fn test_unbounded() {
+        let mut cache = LruCache::unbounded();
+        for i in 0..13370 {
+            cache.put(i, ());
+        }
+        assert_eq!(cache.len(), 13370);
     }
 
     #[test]
@@ -681,6 +745,41 @@ mod tests {
         assert_eq!(cache.len(), 1);
         assert!(cache.get(&"apple").is_none());
         assert_opt_eq(cache.get(&"banana"), "yellow");
+    }
+
+    #[test]
+    fn test_pop_lru() {
+        let mut cache = LruCache::new(200);
+
+        for i in 0..75 {
+            cache.put(i, "A");
+        }
+        for i in 0..75 {
+            cache.put(i + 100, "B");
+        }
+        for i in 0..75 {
+            cache.put(i + 200, "C");
+        }
+        assert_eq!(cache.len(), 200);
+
+        for i in 0..75 {
+            assert_opt_eq(cache.get(&(74 - i + 100)), "B");
+        }
+        assert_opt_eq(cache.get(&25), "A");
+
+        for i in 26..75 {
+            assert_eq!(cache.pop_lru(), Some((i, "A")));
+        }
+        for i in 0..75 {
+            assert_eq!(cache.pop_lru(), Some((i + 200, "C")));
+        }
+        for i in 0..75 {
+            assert_eq!(cache.pop_lru(), Some((74 - i + 100, "B")));
+        }
+        assert_eq!(cache.pop_lru(), Some((25, "A")));
+        for _ in 0..50 {
+            assert_eq!(cache.pop_lru(), None);
+        }
     }
 
     #[test]
