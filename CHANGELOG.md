@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.1.8](https://github.com/jeromefroe/lru-rs/tree/0.1.8) - 2018-08-19
+
+* Add `pop_lru` to remove least recently used element and `unbounded` constructor.
+
 ## [v0.1.7](https://github.com/jeromefroe/lru-rs/tree/0.1.7) - 2018-01-22
 
 * Implement `Send` and `Sync` for the cache.
