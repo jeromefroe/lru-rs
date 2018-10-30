@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.1.9](https://github.com/jeromefroe/lru-rs/tree/0.1.9) - 2018-10-30
+
+* Add `with_hasher` constructor to allow callers to use a custom hash function.
+
 ## [v0.1.8](https://github.com/jeromefroe/lru-rs/tree/0.1.8) - 2018-08-19
 
 * Add `pop_lru` to remove least recently used element and `unbounded` constructor.
