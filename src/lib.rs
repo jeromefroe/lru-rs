@@ -105,7 +105,7 @@ impl<K, V> LruEntry<K, V> {
 }
 
 /// An LRU Cache
-pub struct LruCache<K, V, S: BuildHasher = RandomState> {
+pub struct LruCache<K, V, S = RandomState> {
     map: HashMap<KeyRef<K>, Box<LruEntry<K, V>>, S>,
     cap: usize,
 
@@ -158,7 +158,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         LruCache::construct(cap, HashMap::with_capacity_and_hasher(cap, hash_builder))
     }
 
-    /// Creates a new LRU Cache with an optional limit on the number of items.
+    /// Creates a new LRU Cache with the given capacity.
     fn construct(cap: usize, map: HashMap<KeyRef<K>, Box<LruEntry<K, V>>, S>) -> LruCache<K, V, S> {
         // NB: The compiler warns that cache does not need to be marked as mutable if we
         // declare it as such since we only mutate it inside the unsafe block.
@@ -560,7 +560,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     }
 }
 
-impl<K, V, S: BuildHasher> Drop for LruCache<K, V, S> {
+impl<K, V, S> Drop for LruCache<K, V, S> {
     fn drop(&mut self) {
         // Prevent compiler from trying to drop the un-initialized fields key and val in head
         // and tail
