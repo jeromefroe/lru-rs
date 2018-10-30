@@ -327,7 +327,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     }
 
     /// Returns the value corresponding to the least recently used item or `None` if the
-    /// cache is empty. Like `peek`, `peek_lru` does not update the LRU list so the key's
+    /// cache is empty. Like `peek`, `peek_lru` does not update the LRU list so the item's
     /// position will be unchanged.
     ///
     /// # Example
