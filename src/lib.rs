@@ -58,8 +58,9 @@
 #[cfg(test)]
 extern crate scoped_threadpool;
 
+use std::collections::hash_map::RandomState;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
+use std::hash::{BuildHasher, Hash, Hasher};
 use std::mem;
 use std::ptr;
 use std::usize;
@@ -104,8 +105,8 @@ impl<K, V> LruEntry<K, V> {
 }
 
 /// An LRU Cache
-pub struct LruCache<K, V> {
-    map: HashMap<KeyRef<K>, Box<LruEntry<K, V>>>,
+pub struct LruCache<K, V, S = RandomState> {
+    map: HashMap<KeyRef<K>, Box<LruEntry<K, V>>, S>,
     cap: usize,
 
     // head and tail are sigil nodes to faciliate inserting entries
@@ -123,7 +124,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     /// let mut cache: LruCache<isize, &str> = LruCache::new(10);
     /// ```
     pub fn new(cap: usize) -> LruCache<K, V> {
-        LruCache::construct(Some(cap))
+        LruCache::construct(cap, HashMap::with_capacity(cap))
     }
 
     /// Creates a new LRU Cache that never automatically evicts items.
@@ -135,16 +136,30 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     /// let mut cache: LruCache<isize, &str> = LruCache::unbounded();
     /// ```
     pub fn unbounded() -> LruCache<K, V> {
-        LruCache::construct(None)
+        LruCache::construct(usize::MAX, HashMap::default())
+    }
+}
+
+impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
+    /// Creates a new LRU Cache that holds at most `cap` items and
+    /// uses the providedash builder to hash keys.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::collections::HashMap;
+    /// use std::collections::hash_map::RandomState;
+    /// use lru::LruCache;
+    ///
+    /// let s = RandomState::new();
+    /// let mut cache: LruCache<isize, &str> = LruCache::with_hasher(10, s);
+    /// ```
+    pub fn with_hasher(cap: usize, hash_builder: S) -> LruCache<K, V, S> {
+        LruCache::construct(cap, HashMap::with_capacity_and_hasher(cap, hash_builder))
     }
 
-    /// Creates a new LRU Cache with an optional limit on the number of items.
-    fn construct(cap: Option<usize>) -> LruCache<K, V> {
-        let (cap, map) = match cap {
-            Some(cap) => (cap, HashMap::with_capacity(cap)),
-            None => (usize::MAX, HashMap::default()),
-        };
-
+    /// Creates a new LRU Cache with the given capacity.
+    fn construct(cap: usize, map: HashMap<KeyRef<K>, Box<LruEntry<K, V>>, S>) -> LruCache<K, V, S> {
         // NB: The compiler warns that cache does not need to be marked as mutable if we
         // declare it as such since we only mutate it inside the unsafe block.
         let cache = LruCache {
@@ -477,32 +492,11 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
             return;
         }
 
-        let mut new_map: HashMap<KeyRef<K>, Box<LruEntry<K, V>>> = HashMap::with_capacity(cap);
-
-        let mut current;
-        unsafe { current = (*self.head).next };
-        while current != self.tail {
-            if new_map.len() < cap {
-                let key = unsafe { &(*current).key };
-                let keyref = KeyRef { k: key };
-
-                // remove node from old map so its destructor isn't run
-                let node = self.map.remove(&keyref).unwrap();
-                new_map.insert(keyref, node);
-
-                unsafe { current = (*current).next }
-            } else {
-                // we are at max capacity so we can just update the tail and break
-                self.detach(current);
-                unsafe {
-                    (*(*current).prev).next = self.tail;
-                    self.tail = (*current).prev;
-                }
-                break;
-            }
+        while self.map.len() > cap {
+            self.remove_last();
         }
+        self.map.shrink_to_fit();
 
-        self.map = new_map;
         self.cap = cap;
     }
 
@@ -566,7 +560,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     }
 }
 
-impl<K, V> Drop for LruCache<K, V> {
+impl<K, V, S> Drop for LruCache<K, V, S> {
     fn drop(&mut self) {
         // Prevent compiler from trying to drop the un-initialized fields key and val in head
         // and tail
@@ -622,6 +616,19 @@ mod tests {
             cache.put(i, ());
         }
         assert_eq!(cache.len(), 13370);
+    }
+
+    #[test]
+    fn test_with_hasher() {
+        use std::collections::hash_map::RandomState;
+
+        let s = RandomState::new();
+        let mut cache = LruCache::with_hasher(16, s);
+
+        for i in 0..13370 {
+            cache.put(i, ());
+        }
+        assert_eq!(cache.len(), 16);
     }
 
     #[test]
