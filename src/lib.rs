@@ -341,6 +341,36 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         }
     }
 
+    /// Returns the value corresponding to the least recently used item or `None` if the
+    /// cache is empty. Like `peek`, `peek_lru` does not update the LRU list so the item's
+    /// position will be unchanged.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// cache.put(1, "a");
+    /// cache.put(2, "b");
+    ///
+    /// assert_eq!(cache.peek_lru(), Some((&1, &"a")));
+    /// ```
+    pub fn peek_lru<'a>(&'a self) -> Option<(&'a K, &'a V)> {
+        if self.len() == 0 {
+            return None;
+        }
+
+        let (key, val);
+        unsafe {
+            let node = (*self.tail).prev;
+            key = &(*node).key;
+            val = &(*node).val;
+        }
+
+        Some((key, val))
+    }
+
     /// Returns a bool indicating whether the given key is in the cache. Does not update the
     /// LRU list.
     ///
@@ -609,6 +639,16 @@ mod tests {
         assert_eq!(opt.unwrap(), &v);
     }
 
+    fn assert_opt_eq_tuple<K: PartialEq + Debug, V: PartialEq + Debug>(
+        opt: Option<(&K, &V)>,
+        kv: (K, V),
+    ) {
+        assert!(opt.is_some());
+        let res = opt.unwrap();
+        assert_eq!(res.0, &kv.0);
+        assert_eq!(res.1, &kv.1);
+    }
+
     #[test]
     fn test_unbounded() {
         let mut cache = LruCache::unbounded();
@@ -723,6 +763,23 @@ mod tests {
         assert!(cache.peek(&"apple").is_none());
         assert_opt_eq(cache.peek(&"banana"), "yellow");
         assert_opt_eq(cache.peek(&"pear"), "green");
+    }
+
+    #[test]
+    fn test_peek_lru() {
+        let mut cache = LruCache::new(2);
+
+        assert!(cache.peek_lru().is_none());
+
+        cache.put("apple", "red");
+        cache.put("banana", "yellow");
+        assert_opt_eq_tuple(cache.peek_lru(), ("apple", "red"));
+
+        cache.get(&"apple");
+        assert_opt_eq_tuple(cache.peek_lru(), ("banana", "yellow"));
+
+        cache.clear();
+        assert!(cache.peek_lru().is_none());
     }
 
     #[test]
