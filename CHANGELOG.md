@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.1.10](https://github.com/jeromefroe/lru-rs/tree/0.1.10) - 2018-11-07
+
+* Add `peek_lru` method to get the least recently used element.
+
 ## [v0.1.9](https://github.com/jeromefroe/lru-rs/tree/0.1.9) - 2018-10-30
 
 * Add `with_hasher` constructor to allow callers to use a custom hash function.
