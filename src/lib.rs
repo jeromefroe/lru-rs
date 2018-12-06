@@ -61,6 +61,8 @@ extern crate scoped_threadpool;
 use std::collections::hash_map::RandomState;
 use std::collections::HashMap;
 use std::hash::{BuildHasher, Hash, Hasher};
+use std::iter::FusedIterator;
+use std::marker::PhantomData;
 use std::mem;
 use std::ptr;
 use std::usize;
@@ -557,6 +559,31 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         }
     }
 
+    /// An iterator visiting all entries in order. The iterator element type is `(&'a K, &'a V)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use lru::LruCache;
+    ///
+    /// let mut cache = LruCache::new(3);
+    /// cache.put("a", 1);
+    /// cache.put("b", 2);
+    /// cache.put("c", 3);
+    ///
+    /// for (key, val) in cache.iter() {
+    ///     println!("key: {} val: {}", key, val);
+    /// }
+    /// ```
+    pub fn iter<'a>(&'a self) -> Iter<'a, K, V> {
+        Iter {
+            len: self.len(),
+            ptr: unsafe { (*self.head).next },
+            end: unsafe { (*self.tail).prev },
+            phantom: PhantomData,
+        }
+    }
+
     fn remove_last(&mut self) -> Option<Box<LruEntry<K, V>>> {
         let prev;
         unsafe { prev = (*self.tail).prev }
@@ -617,11 +644,97 @@ impl<K, V, S> Drop for LruCache<K, V, S> {
     }
 }
 
+impl<'a, K: Hash + Eq, V, S: BuildHasher> IntoIterator for &'a LruCache<K, V, S> {
+    type Item = (&'a K, &'a V);
+    type IntoIter = Iter<'a, K, V>;
+
+    fn into_iter(self) -> Iter<'a, K, V> {
+        self.iter()
+    }
+}
+
 // The compiler does not automatically derive Send and Sync for LruCache because it contains
 // raw pointers. The raw pointers are safely encapsulated by LruCache though so we can
 // implement Send and Sync for it below.
-unsafe impl<K: Sync + Send, V: Sync + Send> Send for LruCache<K, V> {}
-unsafe impl<K: Sync + Send, V: Sync + Send> Sync for LruCache<K, V> {}
+unsafe impl<K: Send, V: Send> Send for LruCache<K, V> {}
+unsafe impl<K: Sync, V: Sync> Sync for LruCache<K, V> {}
+
+/// An iterator over the entries of a `LruCache`.
+///
+/// This `struct` is created by the [`iter`] method on [`LruCache`][`LruCache`]. See its
+/// documentation for more.
+///
+/// [`iter`]: struct.LruCache.html#method.iter
+/// [`LruCache`]: struct.LruCache.html
+pub struct Iter<'a, K: 'a, V: 'a> {
+    len: usize,
+
+    ptr: *const LruEntry<K, V>,
+    end: *const LruEntry<K, V>,
+
+    phantom: PhantomData<&'a K>,
+}
+
+impl<'a, K, V> Iterator for Iter<'a, K, V> {
+    type Item = (&'a K, &'a V);
+
+    fn next(&mut self) -> Option<(&'a K, &'a V)> {
+        if self.len == 0 {
+            return None;
+        }
+
+        let key = unsafe { &(*self.ptr).key };
+        let val = unsafe { &(*self.ptr).val };
+
+        self.len -= 1;
+        self.ptr = unsafe { (*self.ptr).next };
+
+        Some((key, val))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.len, Some(self.len))
+    }
+
+    fn count(self) -> usize {
+        self.len
+    }
+}
+
+impl<'a, K, V> DoubleEndedIterator for Iter<'a, K, V> {
+    fn next_back(&mut self) -> Option<(&'a K, &'a V)> {
+        if self.len == 0 {
+            return None;
+        }
+
+        let key = unsafe { &(*self.end).key };
+        let val = unsafe { &(*self.end).val };
+
+        self.len -= 1;
+        self.end = unsafe { (*self.end).prev };
+
+        Some((key, val))
+    }
+}
+
+impl<'a, K, V> ExactSizeIterator for Iter<'a, K, V> {}
+impl<'a, K, V> FusedIterator for Iter<'a, K, V> {}
+
+impl<'a, K, V> Clone for Iter<'a, K, V> {
+    fn clone(&self) -> Iter<'a, K, V> {
+        Iter {
+            len: self.len,
+            ptr: self.ptr,
+            end: self.end,
+            phantom: PhantomData,
+        }
+    }
+}
+
+// The compiler does not automatically derive Send and Sync for Iter because it contains
+// raw pointers.
+unsafe impl<'a, K: Send, V: Send> Send for Iter<'a, K, V> {}
+unsafe impl<'a, K: Sync, V: Sync> Sync for Iter<'a, K, V> {}
 
 #[cfg(test)]
 mod tests {
@@ -914,7 +1027,7 @@ mod tests {
     }
 
     #[test]
-    fn test_sync() {
+    fn test_multiple_threads() {
         let mut pool = Pool::new(1);
         let mut cache = LruCache::new(4);
         cache.put(1, "a");
@@ -927,5 +1040,122 @@ mod tests {
         });
 
         assert_eq!((cache_ref).peek(&1), Some(&"a"));
+    }
+
+    #[test]
+    fn test_iter_forwards() {
+        let mut cache = LruCache::new(3);
+        cache.put("a", 1);
+        cache.put("b", 2);
+        cache.put("c", 3);
+
+        let mut iter = cache.iter();
+        assert_eq!(iter.len(), 3);
+        assert_opt_eq_tuple(iter.next(), ("c", 3));
+
+        assert_eq!(iter.len(), 2);
+        assert_opt_eq_tuple(iter.next(), ("b", 2));
+
+        assert_eq!(iter.len(), 1);
+        assert_opt_eq_tuple(iter.next(), ("a", 1));
+
+        assert_eq!(iter.len(), 0);
+        assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn test_iter_backwards() {
+        let mut cache = LruCache::new(3);
+        cache.put("a", 1);
+        cache.put("b", 2);
+        cache.put("c", 3);
+
+        let mut iter = cache.iter();
+        assert_eq!(iter.len(), 3);
+        assert_opt_eq_tuple(iter.next_back(), ("a", 1));
+
+        assert_eq!(iter.len(), 2);
+        assert_opt_eq_tuple(iter.next_back(), ("b", 2));
+
+        assert_eq!(iter.len(), 1);
+        assert_opt_eq_tuple(iter.next_back(), ("c", 3));
+
+        assert_eq!(iter.len(), 0);
+        assert_eq!(iter.next_back(), None);
+    }
+
+    #[test]
+    fn test_iter_forwards_and_backwards() {
+        let mut cache = LruCache::new(3);
+        cache.put("a", 1);
+        cache.put("b", 2);
+        cache.put("c", 3);
+
+        let mut iter = cache.iter();
+        assert_eq!(iter.len(), 3);
+        assert_opt_eq_tuple(iter.next(), ("c", 3));
+
+        assert_eq!(iter.len(), 2);
+        assert_opt_eq_tuple(iter.next_back(), ("a", 1));
+
+        assert_eq!(iter.len(), 1);
+        assert_opt_eq_tuple(iter.next(), ("b", 2));
+
+        assert_eq!(iter.len(), 0);
+        assert_eq!(iter.next_back(), None);
+    }
+
+    #[test]
+    fn test_iter_multiple_threads() {
+        let mut pool = Pool::new(1);
+        let mut cache = LruCache::new(3);
+        cache.put("a", 1);
+        cache.put("b", 2);
+        cache.put("c", 3);
+
+        let mut iter = cache.iter();
+        assert_eq!(iter.len(), 3);
+        assert_opt_eq_tuple(iter.next(), ("c", 3));
+
+        {
+            let iter_ref = &mut iter;
+            pool.scoped(|scoped| {
+                scoped.execute(move || {
+                    assert_eq!(iter_ref.len(), 2);
+                    assert_opt_eq_tuple(iter_ref.next(), ("b", 2));
+                });
+            });
+        }
+
+        assert_eq!(iter.len(), 1);
+        assert_opt_eq_tuple(iter.next(), ("a", 1));
+
+        assert_eq!(iter.len(), 0);
+        assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn test_iter_clone() {
+        let mut cache = LruCache::new(3);
+        cache.put("a", 1);
+        cache.put("b", 2);
+
+        let mut iter = cache.iter();
+        let mut iter_clone = iter.clone();
+
+        assert_eq!(iter.len(), 2);
+        assert_opt_eq_tuple(iter.next(), ("b", 2));
+        assert_eq!(iter_clone.len(), 2);
+        assert_opt_eq_tuple(iter_clone.next(), ("b", 2));
+
+        assert_eq!(iter.len(), 1);
+        assert_opt_eq_tuple(iter.next(), ("a", 1));
+        assert_eq!(iter_clone.len(), 1);
+        assert_opt_eq_tuple(iter_clone.next(), ("a", 1));
+
+        assert_eq!(iter.len(), 0);
+        assert_eq!(iter.next(), None);
+        assert_eq!(iter_clone.len(), 0);
+        assert_eq!(iter_clone.next(), None);
     }
 }
