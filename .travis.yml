@@ -43,12 +43,12 @@ matrix:
   - env: NAME="format"
     rust: nightly
     install:
-    - rustup component add rustfmt-preview
+    - rustup component add rustfmt
     script:
     - cargo fmt --all -- --check
   - env: NAME="lint"
     rust: nightly
     install:
-    - rustup component add clippy-preview --toolchain=nightly
+    - rustup component add clippy
     script:
     - cargo clippy
