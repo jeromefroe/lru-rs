@@ -41,13 +41,13 @@ matrix:
   - env: NAME="nightly"
     rust: nightly
   - env: NAME="format"
-    rust: nightly
+    rust: stable
     install:
     - rustup component add rustfmt
     script:
     - cargo fmt --all -- --check
   - env: NAME="lint"
-    rust: nightly
+    rust: stable
     install:
     - rustup component add clippy
     script:
