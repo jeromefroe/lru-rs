@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.1.11](https://github.com/jeromefroe/lru-rs/tree/0.1.11) - 2018-12-10
+
+* Implement `Iterator` trait for the cache.
+
 ## [v0.1.10](https://github.com/jeromefroe/lru-rs/tree/0.1.10) - 2018-11-07
 
 * Add `peek_lru` method to get the least recently used element.
