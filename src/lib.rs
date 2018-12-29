@@ -65,6 +65,7 @@ extern crate scoped_threadpool;
 #[cfg(not(feature = "nightly"))]
 extern crate std as alloc;
 
+use alloc::borrow::Borrow;
 use alloc::boxed::Box;
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::iter::FusedIterator;
@@ -100,6 +101,19 @@ impl<K: PartialEq> PartialEq for KeyRef<K> {
 }
 
 impl<K: Eq> Eq for KeyRef<K> {}
+
+// This fails to compile with the following error:
+// conflicting implementations of trait `std::borrow::Borrow<KeyRef<_>>` for type `KeyRef<_>`:
+//
+// note: conflicting implementation in crate core:
+//
+//   - impl<T>; std::borrow::Borrow<T>; for T
+//     where T: ?Sized;
+impl<J, K: Borrow<J>> Borrow<J> for KeyRef<K> {
+    fn borrow(&self) -> &J {
+        unimplemented!()
+    }
+}
 
 // Struct used to hold a key value pair. Also contains references to previous and next entries
 // so we can maintain the entries in a linked list ordered by their use.
@@ -270,9 +284,12 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// assert_eq!(cache.get(&2), Some(&"c"));
     /// assert_eq!(cache.get(&3), Some(&"d"));
     /// ```
-    pub fn get<'a>(&'a mut self, k: &K) -> Option<&'a V> {
-        let key = KeyRef { k };
-        let (node_ptr, value) = match self.map.get_mut(&key) {
+    pub fn get<'a, Q>(&'a mut self, k: &Q) -> Option<&'a V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq,
+    {
+        let (node_ptr, value) = match self.map.get_mut(k) {
             None => (None, None),
             Some(node) => {
                 let node_ptr: *mut LruEntry<K, V> = &mut **node;
@@ -1376,5 +1393,15 @@ mod tests {
         assert_opt_eq_tuple(iter.next(), ("b", 2));
         assert_opt_eq_tuple(iter.next(), ("a", 1));
         assert!(iter.next().is_none());
+    }
+
+    fn test_get_with_borrow() {
+        // TODO(jeromefroe): Uncomment this test once the Borrow trait is implemented.
+        // let mut cache = LruCache::new(2);
+
+        // let key = "apple".to_string();
+        // cache.put(key, "red");
+
+        // assert_opt_eq(cache.get(&"apple"), "red");
     }
 }
