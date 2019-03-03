@@ -55,12 +55,12 @@
 //! }
 //! ```
 
+extern crate hashbrown;
 #[cfg(test)]
 extern crate scoped_threadpool;
-extern crate hashbrown;
 
-use hashbrown::HashMap;
 use hashbrown::hash_map::DefaultHashBuilder;
+use hashbrown::HashMap;
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::iter::FusedIterator;
 use std::marker::PhantomData;
