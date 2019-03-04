@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.1.12](https://github.com/jeromefroe/lru-rs/tree/0.1.12) - 2018-03-04
+
+* Replace standard HashMap with hashbrown HashMap.
+
 ## [v0.1.11](https://github.com/jeromefroe/lru-rs/tree/0.1.11) - 2018-12-10
 
 * Implement `Iterator` trait for the cache.
