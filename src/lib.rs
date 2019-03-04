@@ -55,11 +55,12 @@
 //! }
 //! ```
 
+extern crate hashbrown;
 #[cfg(test)]
 extern crate scoped_threadpool;
 
-use std::collections::hash_map::RandomState;
-use std::collections::HashMap;
+use hashbrown::hash_map::DefaultHashBuilder;
+use hashbrown::HashMap;
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::iter::FusedIterator;
 use std::marker::PhantomData;
@@ -107,7 +108,7 @@ impl<K, V> LruEntry<K, V> {
 }
 
 /// An LRU Cache
-pub struct LruCache<K, V, S = RandomState> {
+pub struct LruCache<K, V, S = DefaultHashBuilder> {
     map: HashMap<KeyRef<K>, Box<LruEntry<K, V>>, S>,
     cap: usize,
 
@@ -149,11 +150,13 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// # Example
     ///
     /// ```
-    /// use std::collections::HashMap;
-    /// use std::collections::hash_map::RandomState;
+    /// extern crate hashbrown;
+    /// use hashbrown;
+    /// use hashbrown::HashMap;
+    /// use hashbrown::hash_map::DefaultHashBuilder;
     /// use lru::LruCache;
     ///
-    /// let s = RandomState::new();
+    /// let s = DefaultHashBuilder::default();
     /// let mut cache: LruCache<isize, &str> = LruCache::with_hasher(10, s);
     /// ```
     pub fn with_hasher(cap: usize, hash_builder: S) -> LruCache<K, V, S> {
@@ -773,9 +776,9 @@ mod tests {
 
     #[test]
     fn test_with_hasher() {
-        use std::collections::hash_map::RandomState;
+        use hashbrown::hash_map::DefaultHashBuilder;
 
-        let s = RandomState::new();
+        let s = DefaultHashBuilder::default();;
         let mut cache = LruCache::with_hasher(16, s);
 
         for i in 0..13370 {
