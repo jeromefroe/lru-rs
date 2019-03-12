@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.1.13](https://github.com/jeromefroe/lru-rs/tree/0.1.13) - 2018-03-12
+
+* Bug fix to ensure that popped items are released.
+
 ## [v0.1.12](https://github.com/jeromefroe/lru-rs/tree/0.1.12) - 2018-03-04
 
 * Replace standard HashMap with hashbrown HashMap.
