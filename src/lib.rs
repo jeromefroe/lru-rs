@@ -418,7 +418,11 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         let key = KeyRef { k };
         match self.map.remove(&key) {
             None => None,
-            Some(lru_entry) => Some(lru_entry.val),
+            Some(mut old_node) => {
+                let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
+                self.detach(node_ptr);
+                Some(old_node.val)
+            }
         }
     }
 
@@ -1160,5 +1164,28 @@ mod tests {
         assert_eq!(iter.next(), None);
         assert_eq!(iter_clone.len(), 0);
         assert_eq!(iter_clone.next(), None);
+    }
+
+    #[test]
+    fn test_that_pop_actually_detaches_node() {
+        let mut cache = LruCache::new(5);
+
+        cache.put("a", 1);
+        cache.put("b", 2);
+        cache.put("c", 3);
+        cache.put("d", 4);
+        cache.put("e", 5);
+
+        assert_eq!(cache.pop(&"c"), Some(3));
+
+        cache.put("f", 6);
+
+        let mut iter = cache.iter();
+        assert_opt_eq_tuple(iter.next(), ("f", 6));
+        assert_opt_eq_tuple(iter.next(), ("e", 5));
+        assert_opt_eq_tuple(iter.next(), ("d", 4));
+        assert_opt_eq_tuple(iter.next(), ("b", 2));
+        assert_opt_eq_tuple(iter.next(), ("a", 1));
+        assert!(iter.next().is_none());
     }
 }
