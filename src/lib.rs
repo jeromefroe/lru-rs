@@ -591,6 +591,41 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         }
     }
 
+    /// An iterator visiting all entries in order, giving a mutable reference on V.
+    /// The iterator element type is `(&'a K, &'a mut V)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use lru::LruCache;
+    ///
+    /// struct HddBlock {
+    ///     dirty: bool,
+    ///     data: [u8; 512]
+    /// }
+    ///
+    /// let mut cache = LruCache::new(3);
+    /// cache.put(0, HddBlock { dirty: false, data: [0x00; 512]});
+    /// cache.put(1, HddBlock { dirty: true,  data: [0x55; 512]});
+    /// cache.put(2, HddBlock { dirty: true,  data: [0x77; 512]});
+    ///
+    /// // write dirty blocks to disk.
+    /// for (block_id, block) in cache.iter_mut() {
+    ///     if block.dirty {
+    ///         // write block to disk
+    ///         block.dirty = false
+    ///     }
+    /// }
+    /// ```
+    pub fn iter_mut<'a>(&'a mut self) -> IterMut<'a, K, V> {
+        IterMut {
+            len: self.len(),
+            ptr: unsafe { (*self.head).next },
+            end: unsafe { (*self.tail).prev },
+            phantom: PhantomData,
+        }
+    }
+
     fn remove_last(&mut self) -> Option<Box<LruEntry<K, V>>> {
         let prev;
         unsafe { prev = (*self.tail).prev }
@@ -657,6 +692,15 @@ impl<'a, K: Hash + Eq, V, S: BuildHasher> IntoIterator for &'a LruCache<K, V, S>
 
     fn into_iter(self) -> Iter<'a, K, V> {
         self.iter()
+    }
+}
+
+impl<'a, K: Hash + Eq, V, S: BuildHasher> IntoIterator for &'a mut LruCache<K, V, S> {
+    type Item = (&'a K, &'a mut V);
+    type IntoIter = IterMut<'a, K, V>;
+
+    fn into_iter(self) -> IterMut<'a, K, V> {
+        self.iter_mut()
     }
 }
 
@@ -743,6 +787,72 @@ impl<'a, K, V> Clone for Iter<'a, K, V> {
 unsafe impl<'a, K: Send, V: Send> Send for Iter<'a, K, V> {}
 unsafe impl<'a, K: Sync, V: Sync> Sync for Iter<'a, K, V> {}
 
+/// An iterator over mutables entries of a `LruCache`.
+///
+/// This `struct` is created by the [`iter_mut`] method on [`LruCache`][`LruCache`]. See its
+/// documentation for more.
+///
+/// [`iter_mut`]: struct.LruCache.html#method.iter_mut
+/// [`LruCache`]: struct.LruCache.html
+pub struct IterMut<'a, K: 'a, V: 'a> {
+    len: usize,
+
+    ptr: *mut LruEntry<K, V>,
+    end: *mut LruEntry<K, V>,
+
+    phantom: PhantomData<&'a K>,
+}
+
+impl<'a, K, V> Iterator for IterMut<'a, K, V> {
+    type Item = (&'a K, &'a mut V);
+
+    fn next(&mut self) -> Option<(&'a K, &'a mut V)> {
+        if self.len == 0 {
+            return None;
+        }
+
+        let key = unsafe { &(*self.ptr).key };
+        let val = unsafe { &mut (*self.ptr).val };
+
+        self.len -= 1;
+        self.ptr = unsafe { (*self.ptr).next };
+
+        Some((key, val))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.len, Some(self.len))
+    }
+
+    fn count(self) -> usize {
+        self.len
+    }
+}
+
+impl<'a, K, V> DoubleEndedIterator for IterMut<'a, K, V> {
+    fn next_back(&mut self) -> Option<(&'a K, &'a mut V)> {
+        if self.len == 0 {
+            return None;
+        }
+
+        let key = unsafe { &(*self.end).key };
+        let val = unsafe { &mut (*self.end).val };
+
+        self.len -= 1;
+        self.end = unsafe { (*self.end).prev };
+
+        Some((key, val))
+    }
+}
+
+impl<'a, K, V> ExactSizeIterator for IterMut<'a, K, V> {}
+impl<'a, K, V> FusedIterator for IterMut<'a, K, V> {}
+
+// The compiler does not automatically derive Send and Sync for Iter because it contains
+// raw pointers.
+unsafe impl<'a, K: Send, V: Send> Send for IterMut<'a, K, V> {}
+unsafe impl<'a, K: Sync, V: Sync> Sync for IterMut<'a, K, V> {}
+
 #[cfg(test)]
 mod tests {
     use super::LruCache;
@@ -761,6 +871,16 @@ mod tests {
 
     fn assert_opt_eq_tuple<K: PartialEq + Debug, V: PartialEq + Debug>(
         opt: Option<(&K, &V)>,
+        kv: (K, V),
+    ) {
+        assert!(opt.is_some());
+        let res = opt.unwrap();
+        assert_eq!(res.0, &kv.0);
+        assert_eq!(res.1, &kv.1);
+    }
+
+    fn assert_opt_eq_mut_tuple<K: PartialEq + Debug, V: PartialEq + Debug>(
+        opt: Option<(&K, &mut V)>,
         kv: (K, V),
     ) {
         assert!(opt.is_some());
@@ -1056,18 +1176,36 @@ mod tests {
         cache.put("b", 2);
         cache.put("c", 3);
 
-        let mut iter = cache.iter();
-        assert_eq!(iter.len(), 3);
-        assert_opt_eq_tuple(iter.next(), ("c", 3));
+        {
+            // iter const
+            let mut iter = cache.iter();
+            assert_eq!(iter.len(), 3);
+            assert_opt_eq_tuple(iter.next(), ("c", 3));
 
-        assert_eq!(iter.len(), 2);
-        assert_opt_eq_tuple(iter.next(), ("b", 2));
+            assert_eq!(iter.len(), 2);
+            assert_opt_eq_tuple(iter.next(), ("b", 2));
 
-        assert_eq!(iter.len(), 1);
-        assert_opt_eq_tuple(iter.next(), ("a", 1));
+            assert_eq!(iter.len(), 1);
+            assert_opt_eq_tuple(iter.next(), ("a", 1));
 
-        assert_eq!(iter.len(), 0);
-        assert_eq!(iter.next(), None);
+            assert_eq!(iter.len(), 0);
+            assert_eq!(iter.next(), None);
+        }
+        {
+            // iter mut
+            let mut iter = cache.iter_mut();
+            assert_eq!(iter.len(), 3);
+            assert_opt_eq_mut_tuple(iter.next(), ("c", 3));
+
+            assert_eq!(iter.len(), 2);
+            assert_opt_eq_mut_tuple(iter.next(), ("b", 2));
+
+            assert_eq!(iter.len(), 1);
+            assert_opt_eq_mut_tuple(iter.next(), ("a", 1));
+
+            assert_eq!(iter.len(), 0);
+            assert_eq!(iter.next(), None);
+        }
     }
 
     #[test]
@@ -1077,18 +1215,37 @@ mod tests {
         cache.put("b", 2);
         cache.put("c", 3);
 
-        let mut iter = cache.iter();
-        assert_eq!(iter.len(), 3);
-        assert_opt_eq_tuple(iter.next_back(), ("a", 1));
+        {
+            // iter const
+            let mut iter = cache.iter();
+            assert_eq!(iter.len(), 3);
+            assert_opt_eq_tuple(iter.next_back(), ("a", 1));
 
-        assert_eq!(iter.len(), 2);
-        assert_opt_eq_tuple(iter.next_back(), ("b", 2));
+            assert_eq!(iter.len(), 2);
+            assert_opt_eq_tuple(iter.next_back(), ("b", 2));
 
-        assert_eq!(iter.len(), 1);
-        assert_opt_eq_tuple(iter.next_back(), ("c", 3));
+            assert_eq!(iter.len(), 1);
+            assert_opt_eq_tuple(iter.next_back(), ("c", 3));
 
-        assert_eq!(iter.len(), 0);
-        assert_eq!(iter.next_back(), None);
+            assert_eq!(iter.len(), 0);
+            assert_eq!(iter.next_back(), None);
+        }
+
+        {
+            // iter mut
+            let mut iter = cache.iter_mut();
+            assert_eq!(iter.len(), 3);
+            assert_opt_eq_mut_tuple(iter.next_back(), ("a", 1));
+
+            assert_eq!(iter.len(), 2);
+            assert_opt_eq_mut_tuple(iter.next_back(), ("b", 2));
+
+            assert_eq!(iter.len(), 1);
+            assert_opt_eq_mut_tuple(iter.next_back(), ("c", 3));
+
+            assert_eq!(iter.len(), 0);
+            assert_eq!(iter.next_back(), None);
+        }
     }
 
     #[test]
@@ -1098,18 +1255,36 @@ mod tests {
         cache.put("b", 2);
         cache.put("c", 3);
 
-        let mut iter = cache.iter();
-        assert_eq!(iter.len(), 3);
-        assert_opt_eq_tuple(iter.next(), ("c", 3));
+        {
+            // iter const
+            let mut iter = cache.iter();
+            assert_eq!(iter.len(), 3);
+            assert_opt_eq_tuple(iter.next(), ("c", 3));
 
-        assert_eq!(iter.len(), 2);
-        assert_opt_eq_tuple(iter.next_back(), ("a", 1));
+            assert_eq!(iter.len(), 2);
+            assert_opt_eq_tuple(iter.next_back(), ("a", 1));
 
-        assert_eq!(iter.len(), 1);
-        assert_opt_eq_tuple(iter.next(), ("b", 2));
+            assert_eq!(iter.len(), 1);
+            assert_opt_eq_tuple(iter.next(), ("b", 2));
 
-        assert_eq!(iter.len(), 0);
-        assert_eq!(iter.next_back(), None);
+            assert_eq!(iter.len(), 0);
+            assert_eq!(iter.next_back(), None);
+        }
+        {
+            // iter mut
+            let mut iter = cache.iter_mut();
+            assert_eq!(iter.len(), 3);
+            assert_opt_eq_mut_tuple(iter.next(), ("c", 3));
+
+            assert_eq!(iter.len(), 2);
+            assert_opt_eq_mut_tuple(iter.next_back(), ("a", 1));
+
+            assert_eq!(iter.len(), 1);
+            assert_opt_eq_mut_tuple(iter.next(), ("b", 2));
+
+            assert_eq!(iter.len(), 0);
+            assert_eq!(iter.next_back(), None);
+        }
     }
 
     #[test]
