@@ -55,18 +55,32 @@
 //! }
 //! ```
 
+#![no_std]
+#![cfg_attr(feature = "nightly", feature(alloc))]
+
 extern crate hashbrown;
 #[cfg(test)]
 extern crate scoped_threadpool;
 
+#[cfg(not(feature = "nightly"))]
+extern crate std as alloc;
+
+use alloc::boxed::Box;
+use core::hash::{BuildHasher, Hash, Hasher};
+use core::iter::FusedIterator;
+use core::marker::PhantomData;
+use core::mem;
+use core::ptr;
+use core::usize;
 use hashbrown::hash_map::DefaultHashBuilder;
 use hashbrown::HashMap;
-use std::hash::{BuildHasher, Hash, Hasher};
-use std::iter::FusedIterator;
-use std::marker::PhantomData;
-use std::mem;
-use std::ptr;
-use std::usize;
+
+#[cfg(test)]
+#[macro_use]
+extern crate std;
+
+#[cfg(feature = "nightly")]
+extern crate alloc;
 
 // Struct used to hold a reference to a key
 struct KeyRef<K> {
@@ -746,8 +760,8 @@ unsafe impl<'a, K: Sync, V: Sync> Sync for Iter<'a, K, V> {}
 #[cfg(test)]
 mod tests {
     use super::LruCache;
+    use core::fmt::Debug;
     use scoped_threadpool::Pool;
-    use std::fmt::Debug;
 
     fn assert_opt_eq<V: PartialEq + Debug>(opt: Option<&V>, v: V) {
         assert!(opt.is_some());
