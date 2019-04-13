@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.1.15](https://github.com/jeromefroe/lru-rs/tree/0.1.15) - 2018-04-13
+
+* Make crate no_std compatible with nightly feature.
+
 ## [v0.1.14](https://github.com/jeromefroe/lru-rs/tree/0.1.14) - 2018-04-13
 
 * Implement `IterMut` to be able to get a mutable iterator for the cache.
