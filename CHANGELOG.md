@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.1.14](https://github.com/jeromefroe/lru-rs/tree/0.1.14) - 2018-04-13
+
+* Implement `IterMut` to be able to get a mutable iterator for the cache.
+
 ## [v0.1.13](https://github.com/jeromefroe/lru-rs/tree/0.1.13) - 2018-03-12
 
 * Bug fix to ensure that popped items are released.
