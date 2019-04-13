@@ -11,7 +11,7 @@ license = "MIT"
 keywords = ["LRU", "cache"]
 
 [features]
-nightly = []
+nightly = ["hashbrown/nightly"]
 
 [dependencies]
 hashbrown = "0.1.*"
