@@ -23,25 +23,25 @@ extern crate lru;
 use lru::LruCache;
 
 fn main() {
-        let mut cache = LruCache::new(2);
-        cache.put("apple", 3);
-        cache.put("banana", 2);
+    let mut cache = LruCache::new(2);
+    cache.put("apple", 3);
+    cache.put("banana", 2);
 
-        assert_eq!(*cache.get(&"apple").unwrap(), 3);
-        assert_eq!(*cache.get(&"banana").unwrap(), 2);
-        assert!(cache.get(&"pear").is_none());
+    assert_eq!(*cache.get(&"apple").unwrap(), 3);
+    assert_eq!(*cache.get(&"banana").unwrap(), 2);
+    assert!(cache.get(&"pear").is_none());
 
-        cache.put("pear", 4);
+    cache.put("pear", 4);
 
-        assert_eq!(*cache.get(&"pear").unwrap(), 4);
-        assert_eq!(*cache.get(&"banana").unwrap(), 2);
-        assert!(cache.get(&"apple").is_none());
+    assert_eq!(*cache.get(&"pear").unwrap(), 4);
+    assert_eq!(*cache.get(&"banana").unwrap(), 2);
+    assert!(cache.get(&"apple").is_none());
 
-        {
-            let v = cache.get_mut(&"banana").unwrap();
-            *v = 6;
-        }
+    {
+        let v = cache.get_mut(&"banana").unwrap();
+        *v = 6;
+    }
 
-        assert_eq!(*cache.get(&"banana").unwrap(), 6);
+    assert_eq!(*cache.get(&"banana").unwrap(), 6);
 }
 ```
