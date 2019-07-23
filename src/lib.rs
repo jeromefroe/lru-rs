@@ -56,9 +56,10 @@
 //! ```
 
 #![no_std]
-#![cfg_attr(feature = "nightly", feature(alloc))]
+#![cfg_attr(feature = "nightly", feature(alloc, optin_builtin_traits))]
 
 extern crate hashbrown;
+
 #[cfg(test)]
 extern crate scoped_threadpool;
 
@@ -84,7 +85,8 @@ extern crate std;
 extern crate alloc;
 
 // Struct used to hold a reference to a key
-struct KeyRef<K> {
+#[doc(hidden)]
+pub struct KeyRef<K> {
     k: *const K,
 }
 
@@ -102,16 +104,28 @@ impl<K: PartialEq> PartialEq for KeyRef<K> {
 
 impl<K: Eq> Eq for KeyRef<K> {}
 
-// This fails to compile with the following error:
-// conflicting implementations of trait `std::borrow::Borrow<KeyRef<_>>` for type `KeyRef<_>`:
-//
-// note: conflicting implementation in crate core:
-//
-//   - impl<T>; std::borrow::Borrow<T>; for T
-//     where T: ?Sized;
-impl<J, K: Borrow<J>> Borrow<J> for KeyRef<K> {
-    fn borrow(&self) -> &J {
-        unimplemented!()
+#[cfg(feature = "nightly")]
+#[doc(hidden)]
+pub auto trait NotKeyRef {}
+
+#[cfg(feature = "nightly")]
+impl<K> !NotKeyRef for KeyRef<K> {}
+
+#[cfg(feature = "nightly")]
+impl<K, D> Borrow<D> for KeyRef<K>
+where
+    K: Borrow<D>,
+    D: NotKeyRef + ?Sized,
+{
+    fn borrow(&self) -> &D {
+        unsafe { (&*self.k) }.borrow()
+    }
+}
+
+#[cfg(not(feature = "nightly"))]
+impl<K> Borrow<K> for KeyRef<K> {
+    fn borrow(&self) -> &K {
+        unsafe { (&*self.k) }
     }
 }
 
@@ -286,8 +300,8 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// ```
     pub fn get<'a, Q>(&'a mut self, k: &Q) -> Option<&'a V>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq,
+        KeyRef<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
     {
         let (node_ptr, value) = match self.map.get_mut(k) {
             None => (None, None),
@@ -1395,13 +1409,16 @@ mod tests {
         assert!(iter.next().is_none());
     }
 
+    #[test]
+    #[cfg(feature = "nightly")]
     fn test_get_with_borrow() {
-        // TODO(jeromefroe): Uncomment this test once the Borrow trait is implemented.
-        // let mut cache = LruCache::new(2);
+        use alloc::string::String;
 
-        // let key = "apple".to_string();
-        // cache.put(key, "red");
+        let mut cache = LruCache::new(2);
 
-        // assert_opt_eq(cache.get(&"apple"), "red");
+        let key = String::from("apple");
+        cache.put(key, "red");
+
+        assert_opt_eq(cache.get("apple"), "red");
     }
 }
