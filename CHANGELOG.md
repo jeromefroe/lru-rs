@@ -1,18 +1,22 @@
 # Changelog
 
-## [v0.1.15](https://github.com/jeromefroe/lru-rs/tree/0.1.15) - 2018-04-13
+## [v0.1.16](https://github.com/jeromefroe/lru-rs/tree/0.1.16) - 2019-07-25
+
+* Implement Borrow trait for KeyRef with nightly OIBIT feature.
+
+## [v0.1.15](https://github.com/jeromefroe/lru-rs/tree/0.1.15) - 2019-04-13
 
 * Make crate no_std compatible with nightly feature.
 
-## [v0.1.14](https://github.com/jeromefroe/lru-rs/tree/0.1.14) - 2018-04-13
+## [v0.1.14](https://github.com/jeromefroe/lru-rs/tree/0.1.14) - 2019-04-13
 
 * Implement `IterMut` to be able to get a mutable iterator for the cache.
 
-## [v0.1.13](https://github.com/jeromefroe/lru-rs/tree/0.1.13) - 2018-03-12
+## [v0.1.13](https://github.com/jeromefroe/lru-rs/tree/0.1.13) - 2019-03-12
 
 * Bug fix to ensure that popped items are released.
 
-## [v0.1.12](https://github.com/jeromefroe/lru-rs/tree/0.1.12) - 2018-03-04
+## [v0.1.12](https://github.com/jeromefroe/lru-rs/tree/0.1.12) - 2019-03-04
 
 * Replace standard HashMap with hashbrown HashMap.
 
