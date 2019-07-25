@@ -56,15 +56,17 @@
 //! ```
 
 #![no_std]
-#![cfg_attr(feature = "nightly", feature(alloc))]
+#![cfg_attr(feature = "nightly", feature(alloc, optin_builtin_traits))]
 
 extern crate hashbrown;
+
 #[cfg(test)]
 extern crate scoped_threadpool;
 
 #[cfg(not(feature = "nightly"))]
 extern crate std as alloc;
 
+use alloc::borrow::Borrow;
 use alloc::boxed::Box;
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::iter::FusedIterator;
@@ -83,7 +85,8 @@ extern crate std;
 extern crate alloc;
 
 // Struct used to hold a reference to a key
-struct KeyRef<K> {
+#[doc(hidden)]
+pub struct KeyRef<K> {
     k: *const K,
 }
 
@@ -100,6 +103,31 @@ impl<K: PartialEq> PartialEq for KeyRef<K> {
 }
 
 impl<K: Eq> Eq for KeyRef<K> {}
+
+#[cfg(feature = "nightly")]
+#[doc(hidden)]
+pub auto trait NotKeyRef {}
+
+#[cfg(feature = "nightly")]
+impl<K> !NotKeyRef for KeyRef<K> {}
+
+#[cfg(feature = "nightly")]
+impl<K, D> Borrow<D> for KeyRef<K>
+where
+    K: Borrow<D>,
+    D: NotKeyRef + ?Sized,
+{
+    fn borrow(&self) -> &D {
+        unsafe { (&*self.k) }.borrow()
+    }
+}
+
+#[cfg(not(feature = "nightly"))]
+impl<K> Borrow<K> for KeyRef<K> {
+    fn borrow(&self) -> &K {
+        unsafe { (&*self.k) }
+    }
+}
 
 // Struct used to hold a key value pair. Also contains references to previous and next entries
 // so we can maintain the entries in a linked list ordered by their use.
@@ -270,9 +298,12 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// assert_eq!(cache.get(&2), Some(&"c"));
     /// assert_eq!(cache.get(&3), Some(&"d"));
     /// ```
-    pub fn get<'a>(&'a mut self, k: &K) -> Option<&'a V> {
-        let key = KeyRef { k };
-        let (node_ptr, value) = match self.map.get_mut(&key) {
+    pub fn get<'a, Q>(&'a mut self, k: &Q) -> Option<&'a V>
+    where
+        KeyRef<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        let (node_ptr, value) = match self.map.get_mut(k) {
             None => (None, None),
             Some(node) => {
                 let node_ptr: *mut LruEntry<K, V> = &mut **node;
@@ -1376,5 +1407,18 @@ mod tests {
         assert_opt_eq_tuple(iter.next(), ("b", 2));
         assert_opt_eq_tuple(iter.next(), ("a", 1));
         assert!(iter.next().is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "nightly")]
+    fn test_get_with_borrow() {
+        use alloc::string::String;
+
+        let mut cache = LruCache::new(2);
+
+        let key = String::from("apple");
+        cache.put(key, "red");
+
+        assert_opt_eq(cache.get("apple"), "red");
     }
 }
