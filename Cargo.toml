@@ -14,7 +14,7 @@ keywords = ["LRU", "cache"]
 nightly = ["hashbrown/nightly"]
 
 [dependencies]
-hashbrown = "0.1.*"
+hashbrown = "0.5.*"
 
 [dev-dependencies]
 scoped_threadpool = "0.1.*"
