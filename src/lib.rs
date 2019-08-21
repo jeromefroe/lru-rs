@@ -40,10 +40,11 @@
 //!         assert_eq!(*cache.get(&"banana").unwrap(), 2);
 //!         assert!(cache.get(&"pear").is_none());
 //!
-//!         cache.put("pear", 4);
+//!         assert_eq!(cache.put("banana", 4), Some(2));
+//!         assert_eq!(cache.put("pear", 5), None);
 //!
-//!         assert_eq!(*cache.get(&"pear").unwrap(), 4);
-//!         assert_eq!(*cache.get(&"banana").unwrap(), 2);
+//!         assert_eq!(*cache.get(&"pear").unwrap(), 5);
+//!         assert_eq!(*cache.get(&"banana").unwrap(), 4);
 //!         assert!(cache.get(&"apple").is_none());
 //!
 //!         {
@@ -224,7 +225,8 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         cache
     }
 
-    /// Puts a key-value pair into cache. If the key already exists it updates its value.
+    /// Puts a key-value pair into cache. If the key already exists in the cache, then it updates
+    /// the key's value and returns the old value. Otherwise, `None` is returned.
     ///
     /// # Example
     ///
@@ -232,12 +234,14 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// use lru::LruCache;
     /// let mut cache = LruCache::new(2);
     ///
-    /// cache.put(1, "a");
-    /// cache.put(2, "b");
+    /// assert_eq!(None, cache.put(1, "a"));
+    /// assert_eq!(None, cache.put(2, "b"));
+    /// assert_eq!(Some("b"), cache.put(2, "beta"));
+    ///
     /// assert_eq!(cache.get(&1), Some(&"a"));
-    /// assert_eq!(cache.get(&2), Some(&"b"));
+    /// assert_eq!(cache.get(&2), Some(&"beta"));
     /// ```
-    pub fn put(&mut self, k: K, v: V) {
+    pub fn put(&mut self, k: K, mut v: V) -> Option<V> {
         let node_ptr = self.map.get_mut(&KeyRef { k: &k }).map(|node| {
             let node_ptr: *mut LruEntry<K, V> = &mut **node;
             node_ptr
@@ -247,9 +251,10 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             Some(node_ptr) => {
                 // if the key is already in the cache just update its value and move it to the
                 // front of the list
-                unsafe { (*node_ptr).val = v };
+                unsafe { mem::swap(&mut v, &mut (*node_ptr).val) }
                 self.detach(node_ptr);
                 self.attach(node_ptr);
+                Some(v)
             }
             None => {
                 let mut node = if self.len() == self.cap() {
@@ -276,6 +281,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
 
                 let keyref = unsafe { &(*node_ptr).key };
                 self.map.insert(KeyRef { k: keyref }, node);
+                None
             }
         }
     }
@@ -961,8 +967,8 @@ mod tests {
         let mut cache = LruCache::new(2);
         assert!(cache.is_empty());
 
-        cache.put("apple", "red");
-        cache.put("banana", "yellow");
+        assert_eq!(cache.put("apple", "red"), None);
+        assert_eq!(cache.put("banana", "yellow"), None);
 
         assert_eq!(cache.cap(), 2);
         assert_eq!(cache.len(), 2);
@@ -1006,8 +1012,8 @@ mod tests {
     fn test_put_update() {
         let mut cache = LruCache::new(1);
 
-        cache.put("apple", "red");
-        cache.put("apple", "green");
+        assert_eq!(cache.put("apple", "red"), None);
+        assert_eq!(cache.put("apple", "green"), Some("red"));
 
         assert_eq!(cache.len(), 1);
         assert_opt_eq(cache.get(&"apple"), "green");
@@ -1017,19 +1023,21 @@ mod tests {
     fn test_put_removes_oldest() {
         let mut cache = LruCache::new(2);
 
-        cache.put("apple", "red");
-        cache.put("banana", "yellow");
-        cache.put("pear", "green");
+        assert_eq!(cache.put("apple", "red"), None);
+        assert_eq!(cache.put("banana", "yellow"), None);
+        assert_eq!(cache.put("pear", "green"), None);
 
         assert!(cache.get(&"apple").is_none());
         assert_opt_eq(cache.get(&"banana"), "yellow");
         assert_opt_eq(cache.get(&"pear"), "green");
 
-        cache.put("banana", "green");
-        cache.put("tomato", "red");
+        // Even though we inserted "apple" into the cache earlier it has since been removed from
+        // the cache so there is no current value for `put` to return.
+        assert_eq!(cache.put("apple", "green"), None);
+        assert_eq!(cache.put("tomato", "red"), None);
 
         assert!(cache.get(&"pear").is_none());
-        assert_opt_eq(cache.get(&"banana"), "green");
+        assert_opt_eq(cache.get(&"apple"), "green");
         assert_opt_eq(cache.get(&"tomato"), "red");
     }
 
