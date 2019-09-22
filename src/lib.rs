@@ -309,26 +309,16 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         KeyRef<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        let (node_ptr, value) = match self.map.get_mut(k) {
-            None => (None, None),
-            Some(node) => {
-                let node_ptr: *mut LruEntry<K, V> = &mut **node;
-                // we need to use node_ptr to get a reference to val here because
-                // detach and attach require a mutable reference to self here which
-                // would be disallowed if we set value equal to &node.val
-                (Some(node_ptr), Some(unsafe { &(*node_ptr).val }))
-            }
-        };
+        if let Some(node) = self.map.get_mut(k) {
+            let node_ptr: *mut LruEntry<K, V> = &mut **node;
 
-        match node_ptr {
-            None => (),
-            Some(node_ptr) => {
-                self.detach(node_ptr);
-                self.attach(node_ptr);
-            }
+            self.detach(node_ptr);
+            self.attach(node_ptr);
+
+            Some(unsafe { &(*node_ptr).val })
+        } else {
+            None
         }
-
-        value
     }
 
     /// Returns a mutable reference to the value of the key in the cache or `None` if it
@@ -351,26 +341,16 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// ```
     pub fn get_mut<'a>(&'a mut self, k: &K) -> Option<&'a mut V> {
         let key = KeyRef { k };
-        let (node_ptr, value) = match self.map.get_mut(&key) {
-            None => (None, None),
-            Some(node) => {
-                let node_ptr: *mut LruEntry<K, V> = &mut **node;
-                // we need to use node_ptr to get a reference to val here because
-                // detach and attach require a mutable reference to self here which
-                // would be disallowed if we set value equal to &node.val
-                (Some(node_ptr), Some(unsafe { &mut (*node_ptr).val }))
-            }
-        };
+        if let Some(node) = self.map.get_mut(&key) {
+            let node_ptr: *mut LruEntry<K, V> = &mut **node;
 
-        match node_ptr {
-            None => (),
-            Some(node_ptr) => {
-                self.detach(node_ptr);
-                self.attach(node_ptr);
-            }
+            self.detach(node_ptr);
+            self.attach(node_ptr);
+
+            Some(unsafe { &mut (*node_ptr).val })
+        } else {
+            None
         }
-
-        value
     }
 
     /// Returns the value corresponding to the key in the cache or `None` if it is not
