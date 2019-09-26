@@ -1,8 +1,12 @@
 # Changelog
 
+## [v0.1.18](https://github.com/jeromefroe/lru-rs/tree/0.1.18) - 2019-09-25
+
+- Add borrowed type support for get_mut.
+
 ## [v0.1.17](https://github.com/jeromefroe/lru-rs/tree/0.1.17) - 2019-08-21
 
-- Return Option from put method which contains old value if it exists
+- Return Option from put method which contains old value if it exists.
 
 ## [v0.1.16](https://github.com/jeromefroe/lru-rs/tree/0.1.16) - 2019-07-25
 
