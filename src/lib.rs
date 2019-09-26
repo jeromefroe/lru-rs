@@ -339,9 +339,12 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// assert_eq!(cache.get_mut(&"banana"), Some(&mut 6));
     /// assert_eq!(cache.get_mut(&"pear"), Some(&mut 2));
     /// ```
-    pub fn get_mut<'a>(&'a mut self, k: &K) -> Option<&'a mut V> {
-        let key = KeyRef { k };
-        if let Some(node) = self.map.get_mut(&key) {
+    pub fn get_mut<'a, Q>(&'a mut self, k: &Q) -> Option<&'a mut V>
+    where
+        KeyRef<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        if let Some(node) = self.map.get_mut(k) {
             let node_ptr: *mut LruEntry<K, V> = &mut **node;
 
             self.detach(node_ptr);
@@ -1408,5 +1411,18 @@ mod tests {
         cache.put(key, "red");
 
         assert_opt_eq(cache.get("apple"), "red");
+    }
+
+    #[test]
+    #[cfg(feature = "nightly")]
+    fn test_get_mut_with_borrow() {
+        use alloc::string::String;
+
+        let mut cache = LruCache::new(2);
+
+        let key = String::from("apple");
+        cache.put(key, "red");
+
+        assert_opt_eq(cache.get_mut("apple"), "red");
     }
 }
