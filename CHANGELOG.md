@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.2.0](https://github.com/jeromefroe/lru-rs/tree/0.2.0) - 2019-09-27
+
+- Release a new minor version because of an accidental breaking change in the previous release ([#50](https://github.com/jeromefroe/lru-rs/issues/50)).
+
 ## [v0.1.18](https://github.com/jeromefroe/lru-rs/tree/0.1.18) - 2019-09-25
 
 - Add borrowed type support for get_mut.
