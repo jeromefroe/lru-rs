@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.3.0](https://github.com/jeromefroe/lru-rs/tree/0.3.0) - 2019-10-06
+
+- Update the signature of the `peek` methods to use the `Borrow` trait and add a `peek_mut` method.
+
 ## [v0.2.0](https://github.com/jeromefroe/lru-rs/tree/0.2.0) - 2019-09-27
 
 - Release a new minor version because of an accidental breaking change in the previous release ([#50](https://github.com/jeromefroe/lru-rs/issues/50)).
