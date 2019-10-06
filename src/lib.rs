@@ -356,9 +356,9 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         }
     }
 
-    /// Returns the value corresponding to the key in the cache or `None` if it is not
-    /// present in the cache. Unlike `get`, `peek` does not update the LRU list so the
-    /// key's position will be unchanged.
+    /// Returns a reference to the value corresponding to the key in the cache or `None` if it is
+    /// not present in the cache. Unlike `get`, `peek` does not update the LRU list so the key's
+    /// position will be unchanged.
     ///
     /// # Example
     ///
@@ -372,11 +372,41 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// assert_eq!(cache.peek(&1), Some(&"a"));
     /// assert_eq!(cache.peek(&2), Some(&"b"));
     /// ```
-    pub fn peek<'a>(&'a self, k: &K) -> Option<&'a V> {
-        let key = KeyRef { k };
-        match self.map.get(&key) {
+    pub fn peek<'a, Q>(&'a self, k: &Q) -> Option<&'a V>
+    where
+        KeyRef<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        match self.map.get(k) {
             None => None,
             Some(node) => Some(&node.val),
+        }
+    }
+
+    /// Returns a mutable reference to the value corresponding to the key in the cache or `None`
+    /// if it is not present in the cache. Unlike `get_mut`, `peek_mut` does not update the LRU
+    /// list so the key's position will be unchanged.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// cache.put(1, "a");
+    /// cache.put(2, "b");
+    ///
+    /// assert_eq!(cache.peek_mut(&1), Some(&mut "a"));
+    /// assert_eq!(cache.peek_mut(&2), Some(&mut "b"));
+    /// ```
+    pub fn peek_mut<'a, Q>(&'a mut self, k: &Q) -> Option<&'a mut V>
+    where
+        KeyRef<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        match self.map.get_mut(k) {
+            None => None,
+            Some(node) => Some(&mut node.val),
         }
     }
 
@@ -936,7 +966,7 @@ mod tests {
     fn test_with_hasher() {
         use hashbrown::hash_map::DefaultHashBuilder;
 
-        let s = DefaultHashBuilder::default();;
+        let s = DefaultHashBuilder::default();
         let mut cache = LruCache::with_hasher(16, s);
 
         for i in 0..13370 {
@@ -1039,6 +1069,31 @@ mod tests {
         assert!(cache.peek(&"apple").is_none());
         assert_opt_eq(cache.peek(&"banana"), "yellow");
         assert_opt_eq(cache.peek(&"pear"), "green");
+    }
+
+    #[test]
+    fn test_peek_mut() {
+        let mut cache = LruCache::new(2);
+
+        cache.put("apple", "red");
+        cache.put("banana", "yellow");
+
+        assert_opt_eq_mut(cache.peek_mut(&"banana"), "yellow");
+        assert_opt_eq_mut(cache.peek_mut(&"apple"), "red");
+        assert!(cache.peek_mut(&"pear").is_none());
+
+        cache.put("pear", "green");
+
+        assert!(cache.peek_mut(&"apple").is_none());
+        assert_opt_eq_mut(cache.peek_mut(&"banana"), "yellow");
+        assert_opt_eq_mut(cache.peek_mut(&"pear"), "green");
+
+        {
+            let v = cache.peek_mut(&"banana").unwrap();
+            *v = "green";
+        }
+
+        assert_opt_eq_mut(cache.peek_mut(&"banana"), "green");
     }
 
     #[test]
