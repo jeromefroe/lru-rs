@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.3.1](https://github.com/jeromefroe/lru-rs/tree/0.3.1) - 2019-10-08
+
+- Implement `Debug` for `LruCache`.
+
 ## [v0.3.0](https://github.com/jeromefroe/lru-rs/tree/0.3.0) - 2019-10-06
 
 - Update the signature of the `peek` methods to use the `Borrow` trait and add a `peek_mut` method.
