@@ -69,6 +69,7 @@ extern crate std as alloc;
 
 use alloc::borrow::Borrow;
 use alloc::boxed::Box;
+use core::fmt;
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::iter::FusedIterator;
 use core::marker::PhantomData;
@@ -773,6 +774,15 @@ impl<'a, K: Hash + Eq, V, S: BuildHasher> IntoIterator for &'a mut LruCache<K, V
 // implement Send and Sync for it below.
 unsafe impl<K: Send, V: Send> Send for LruCache<K, V> {}
 unsafe impl<K: Sync, V: Sync> Sync for LruCache<K, V> {}
+
+impl<K: Hash + Eq, V> fmt::Debug for LruCache<K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("LruCache")
+            .field("len", &self.len())
+            .field("cap", &self.cap())
+            .finish()
+    }
+}
 
 /// An iterator over the entries of a `LruCache`.
 ///
