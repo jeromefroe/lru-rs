@@ -458,9 +458,12 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// assert!(cache.contains(&2));
     /// assert!(cache.contains(&3));
     /// ```
-    pub fn contains(&self, k: &K) -> bool {
-        let key = KeyRef { k };
-        self.map.contains_key(&key)
+    pub fn contains<Q>(&self, k: &Q) -> bool 
+    where
+        KeyRef<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized
+    {
+        self.map.contains_key(k)
     }
 
     /// Removes and returns the value corresponding to the key from the cache or
@@ -479,9 +482,12 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// assert_eq!(cache.pop(&2), None);
     /// assert_eq!(cache.len(), 0);
     /// ```
-    pub fn pop(&mut self, k: &K) -> Option<V> {
-        let key = KeyRef { k };
-        match self.map.remove(&key) {
+    pub fn pop<Q>(&mut self, k: &Q) -> Option<V>
+    where
+        KeyRef<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized
+    {
+        match self.map.remove(&k) {
             None => None,
             Some(mut old_node) => {
                 let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
