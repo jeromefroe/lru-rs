@@ -458,10 +458,10 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// assert!(cache.contains(&2));
     /// assert!(cache.contains(&3));
     /// ```
-    pub fn contains<Q>(&self, k: &Q) -> bool 
+    pub fn contains<Q>(&self, k: &Q) -> bool
     where
         KeyRef<K>: Borrow<Q>,
-        Q: Hash + Eq + ?Sized
+        Q: Hash + Eq + ?Sized,
     {
         self.map.contains_key(k)
     }
@@ -485,7 +485,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     pub fn pop<Q>(&mut self, k: &Q) -> Option<V>
     where
         KeyRef<K>: Borrow<Q>,
-        Q: Hash + Eq + ?Sized
+        Q: Hash + Eq + ?Sized,
     {
         match self.map.remove(&k) {
             None => None,
