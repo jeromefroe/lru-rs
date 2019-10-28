@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.4.0](https://github.com/jeromefroe/lru-rs/tree/0.4.0) - 2019-10-28
+
+- Use `Borrow` trait in `contains` and `pop` methods.
+
 ## [v0.3.1](https://github.com/jeromefroe/lru-rs/tree/0.3.1) - 2019-10-08
 
 - Implement `Debug` for `LruCache`.
