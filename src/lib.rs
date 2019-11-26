@@ -214,8 +214,8 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         let cache = LruCache {
             map,
             cap,
-            head: unsafe { Box::into_raw(Box::new(mem::uninitialized::<LruEntry<K, V>>())) },
-            tail: unsafe { Box::into_raw(Box::new(mem::uninitialized::<LruEntry<K, V>>())) },
+            head: unsafe { Box::into_raw(Box::new(mem::MaybeUninit::uninit().assume_init())) },
+            tail: unsafe { Box::into_raw(Box::new(mem::MaybeUninit::uninit().assume_init())) },
         };
 
         unsafe {
