@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.4.1](https://github.com/jeromefroe/lru-rs/tree/0.4.1) - 2019-11-26
+
+- Use `mem::MaybeUninit` instead of `mem::uninitialized`.
+
 ## [v0.4.0](https://github.com/jeromefroe/lru-rs/tree/0.4.0) - 2019-10-28
 
 - Use `Borrow` trait in `contains` and `pop` methods.
