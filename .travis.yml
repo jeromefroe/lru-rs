@@ -52,3 +52,7 @@ matrix:
     - rustup component add clippy
     script:
     - cargo clippy
+  - env: NAME="no-hashbrown"
+    rust: stable
+    script:
+    - cargo test --no-default-features
