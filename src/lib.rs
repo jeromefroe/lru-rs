@@ -59,6 +59,7 @@
 #![no_std]
 #![cfg_attr(feature = "nightly", feature(alloc, optin_builtin_traits))]
 
+#[cfg(feature = "hashbrown")]
 extern crate hashbrown;
 
 #[cfg(test)]
@@ -76,8 +77,11 @@ use core::marker::PhantomData;
 use core::mem;
 use core::ptr;
 use core::usize;
-use hashbrown::hash_map::DefaultHashBuilder;
+
+#[cfg(feature = "hashbrown")]
 use hashbrown::HashMap;
+#[cfg(not(feature = "hashbrown"))]
+use alloc::collections::HashMap;
 
 #[cfg(test)]
 #[macro_use]
@@ -151,8 +155,13 @@ impl<K, V> LruEntry<K, V> {
     }
 }
 
+#[cfg(feature = "hashbrown")]
+type DefaultHasher = hashbrown::hash_map::DefaultHashBuilder;
+#[cfg(not(feature = "hashbrown"))]
+type DefaultHasher = alloc::collections::hash_map::RandomState;
+
 /// An LRU Cache
-pub struct LruCache<K, V, S = DefaultHashBuilder> {
+pub struct LruCache<K, V, S = DefaultHasher> {
     map: HashMap<KeyRef<K>, Box<LruEntry<K, V>>, S>,
     cap: usize,
 
@@ -979,6 +988,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "hashbrown")]
     fn test_with_hasher() {
         use hashbrown::hash_map::DefaultHashBuilder;
 
