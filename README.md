@@ -12,6 +12,8 @@ An implementation of a LRU cache. The cache supports `put`, `get`, `get_mut` and
 all of which are O(1). This crate was heavily influenced by the [LRU Cache implementation in an
 earlier version of Rust's std::collections crate].
 
+The MSRV for this crate is 1.36.0.
+
 ## Example
 
 Below is a simple example of how to instantiate and use a LRU cache.
