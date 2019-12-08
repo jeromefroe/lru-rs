@@ -78,10 +78,10 @@ use core::mem;
 use core::ptr;
 use core::usize;
 
-#[cfg(feature = "hashbrown")]
-use hashbrown::HashMap;
 #[cfg(not(feature = "hashbrown"))]
 use alloc::collections::HashMap;
+#[cfg(feature = "hashbrown")]
+use hashbrown::HashMap;
 
 #[cfg(test)]
 #[macro_use]
