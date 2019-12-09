@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.4.2](https://github.com/jeromefroe/lru-rs/tree/0.4.2) - 2019-12-08
+
+- Make hasbrown usage optional and add MSRV documentation.
+
 ## [v0.4.1](https://github.com/jeromefroe/lru-rs/tree/0.4.1) - 2019-11-26
 
 - Use `mem::MaybeUninit` instead of `mem::uninitialized`.
