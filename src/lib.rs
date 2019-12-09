@@ -87,9 +87,6 @@ use hashbrown::HashMap;
 #[macro_use]
 extern crate std;
 
-#[cfg(feature = "nightly")]
-extern crate alloc;
-
 // Struct used to hold a reference to a key
 #[doc(hidden)]
 pub struct KeyRef<K> {
@@ -156,9 +153,9 @@ impl<K, V> LruEntry<K, V> {
 }
 
 #[cfg(feature = "hashbrown")]
-type DefaultHasher = hashbrown::hash_map::DefaultHashBuilder;
+pub type DefaultHasher = hashbrown::hash_map::DefaultHashBuilder;
 #[cfg(not(feature = "hashbrown"))]
-type DefaultHasher = alloc::collections::hash_map::RandomState;
+pub type DefaultHasher = alloc::collections::hash_map::RandomState;
 
 /// An LRU Cache
 pub struct LruCache<K, V, S = DefaultHasher> {
@@ -203,13 +200,9 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// # Example
     ///
     /// ```
-    /// extern crate hashbrown;
-    /// use hashbrown;
-    /// use hashbrown::HashMap;
-    /// use hashbrown::hash_map::DefaultHashBuilder;
-    /// use lru::LruCache;
+    /// use lru::{LruCache, DefaultHasher};
     ///
-    /// let s = DefaultHashBuilder::default();
+    /// let s = DefaultHasher::default();
     /// let mut cache: LruCache<isize, &str> = LruCache::with_hasher(10, s);
     /// ```
     pub fn with_hasher(cap: usize, hash_builder: S) -> LruCache<K, V, S> {
