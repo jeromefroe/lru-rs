@@ -87,6 +87,9 @@ use hashbrown::HashMap;
 #[macro_use]
 extern crate std;
 
+#[cfg(feature = "nightly")]
+extern crate alloc;
+
 // Struct used to hold a reference to a key
 #[doc(hidden)]
 pub struct KeyRef<K> {
