@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.4.3](https://github.com/jeromefroe/lru-rs/tree/0.4.3) - 2019-12-10
+
+- Add back import of alloc crate on nightly which was accidentally removed.
+
 ## [v0.4.2](https://github.com/jeromefroe/lru-rs/tree/0.4.2) - 2019-12-08
 
 - Make hasbrown usage optional and add MSRV documentation.
