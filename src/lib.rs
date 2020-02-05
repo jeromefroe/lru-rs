@@ -746,6 +746,15 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     }
 }
 
+impl<K, V, S> Drop for LruCache<K, V, S> {
+    fn drop(&mut self) {
+        unsafe {
+            ptr::drop_in_place(self.head);
+            ptr::drop_in_place(self.tail);
+        }
+    }
+}
+
 impl<'a, K: Hash + Eq, V, S: BuildHasher> IntoIterator for &'a LruCache<K, V, S> {
     type Item = (&'a K, &'a V);
     type IntoIter = Iter<'a, K, V>;
