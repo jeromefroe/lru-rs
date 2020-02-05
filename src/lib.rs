@@ -135,12 +135,16 @@ impl<K> Borrow<K> for KeyRef<K> {
     }
 }
 
+struct KeyVal<K, V> {
+    key: K,
+    val: V,
+}
+
 // Struct used to hold a key value pair. Also contains references to previous and next entries
 // so we can maintain the entries in a linked list ordered by their use.
 struct LruEntry<K, V> {
-    // `key` and `val` are only ever `None` for the head and tail entries in the cache.
-    key: Option<K>,
-    val: Option<V>,
+    // `kv` is only ever `None` for the head and tail entries in the cache.
+    kv: Option<KeyVal<K, V>>,
 
     prev: *mut LruEntry<K, V>,
     next: *mut LruEntry<K, V>,
@@ -149,8 +153,7 @@ struct LruEntry<K, V> {
 impl<K, V> LruEntry<K, V> {
     fn new(key: K, val: V) -> Self {
         LruEntry {
-            key: Some(key),
-            val: Some(val),
+            kv: Some(KeyVal { key, val }),
             prev: ptr::null_mut(),
             next: ptr::null_mut(),
         }
@@ -158,8 +161,7 @@ impl<K, V> LruEntry<K, V> {
 
     fn new_empty_entry() -> Self {
         LruEntry {
-            key: None,
-            val: None,
+            kv: None,
             prev: ptr::null_mut(),
             next: ptr::null_mut(),
         }
@@ -268,7 +270,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             Some(node_ptr) => {
                 // if the key is already in the cache just update its value and move it to the
                 // front of the list
-                unsafe { mem::swap(&mut v, (*node_ptr).val.as_mut().unwrap()) }
+                unsafe { mem::swap(&mut v, &mut (*node_ptr).kv.as_mut().unwrap().val) }
                 self.detach(node_ptr);
                 self.attach(node_ptr);
                 Some(v)
@@ -277,12 +279,11 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
                 let mut node = if self.len() == self.cap() {
                     // if the cache is full, remove the last entry so we can use it for the new key
                     let old_key = KeyRef {
-                        k: unsafe { (*(*self.tail).prev).key.as_ref().unwrap() },
+                        k: unsafe { &(*(*self.tail).prev).kv.as_ref().unwrap().key },
                     };
                     let mut old_node = self.map.remove(&old_key).unwrap();
 
-                    old_node.key = Some(k);
-                    old_node.val = Some(v);
+                    old_node.kv = Some(KeyVal { key: k, val: v });
 
                     let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
                     self.detach(node_ptr);
@@ -296,7 +297,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
                 let node_ptr: *mut LruEntry<K, V> = &mut *node;
                 self.attach(node_ptr);
 
-                let keyref = unsafe { (*node_ptr).key.as_ref().unwrap() };
+                let keyref = unsafe { &(*node_ptr).kv.as_ref().unwrap().key };
                 self.map.insert(KeyRef { k: keyref }, node);
                 None
             }
@@ -332,7 +333,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             self.detach(node_ptr);
             self.attach(node_ptr);
 
-            Some(unsafe { (*node_ptr).val.as_ref().unwrap() })
+            Some(unsafe { &(*node_ptr).kv.as_ref().unwrap().val })
         } else {
             None
         }
@@ -367,7 +368,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             self.detach(node_ptr);
             self.attach(node_ptr);
 
-            Some(unsafe { (*node_ptr).val.as_mut().unwrap() })
+            Some(unsafe { &mut (*node_ptr).kv.as_mut().unwrap().val })
         } else {
             None
         }
@@ -396,7 +397,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     {
         match self.map.get(k) {
             None => None,
-            Some(node) => Some(node.val.as_ref().unwrap()),
+            Some(node) => Some(&node.kv.as_ref().unwrap().val),
         }
     }
 
@@ -423,7 +424,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     {
         match self.map.get_mut(k) {
             None => None,
-            Some(node) => Some(node.val.as_mut().unwrap()),
+            Some(node) => Some(&mut node.kv.as_mut().unwrap().val),
         }
     }
 
@@ -447,14 +448,13 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             return None;
         }
 
-        let (key, val);
+        let kv;
         unsafe {
             let node = (*self.tail).prev;
-            key = &(*node).key;
-            val = &(*node).val;
+            kv = &(*node).kv;
         }
 
-        Some((key.as_ref().unwrap(), val.as_ref().unwrap()))
+        Some((&kv.as_ref().unwrap().key, &kv.as_ref().unwrap().val))
     }
 
     /// Returns a bool indicating whether the given key is in the cache. Does not update the
@@ -508,7 +508,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             Some(mut old_node) => {
                 let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
                 self.detach(node_ptr);
-                Some(old_node.val.unwrap())
+                Some(old_node.kv.unwrap().val)
             }
         }
     }
@@ -536,8 +536,9 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         let node = self.remove_last()?;
         // N.B.: Can't destructure directly because of https://github.com/rust-lang/rust/issues/28536
         let node = *node;
-        let LruEntry { key, val, .. } = node;
-        Some((key.unwrap(), val.unwrap()))
+        let LruEntry { kv: opt, .. } = node;
+        let kv = opt.unwrap();
+        Some((kv.key, kv.val))
     }
 
     /// Returns the number of key-value pairs that are currently in the the cache.
@@ -718,7 +719,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         unsafe { prev = (*self.tail).prev }
         if prev != self.head {
             let old_key = KeyRef {
-                k: unsafe { (*(*self.tail).prev).key.as_ref().unwrap() },
+                k: unsafe { &(*(*self.tail).prev).kv.as_ref().unwrap().key },
             };
             let mut old_node = self.map.remove(&old_key).unwrap();
             let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
@@ -812,13 +813,12 @@ impl<'a, K, V> Iterator for Iter<'a, K, V> {
             return None;
         }
 
-        let key = unsafe { &(*self.ptr).key };
-        let val = unsafe { &(*self.ptr).val };
+        let kv = unsafe { &(*self.ptr).kv };
 
         self.len -= 1;
         self.ptr = unsafe { (*self.ptr).next };
 
-        Some((key.as_ref().unwrap(), val.as_ref().unwrap()))
+        Some((&kv.as_ref().unwrap().key, &kv.as_ref().unwrap().val))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -836,13 +836,12 @@ impl<'a, K, V> DoubleEndedIterator for Iter<'a, K, V> {
             return None;
         }
 
-        let key = unsafe { &(*self.end).key };
-        let val = unsafe { &(*self.end).val };
+        let kv = unsafe { &(*self.end).kv };
 
         self.len -= 1;
         self.end = unsafe { (*self.end).prev };
 
-        Some((key.as_ref().unwrap(), val.as_ref().unwrap()))
+        Some((&kv.as_ref().unwrap().key, &kv.as_ref().unwrap().val))
     }
 }
 
@@ -889,13 +888,12 @@ impl<'a, K, V> Iterator for IterMut<'a, K, V> {
             return None;
         }
 
-        let key = unsafe { &(*self.ptr).key };
-        let val = unsafe { &mut (*self.ptr).val };
+        let kv = unsafe { (*self.ptr).kv.as_mut().unwrap() };
 
         self.len -= 1;
         self.ptr = unsafe { (*self.ptr).next };
 
-        Some((key.as_ref().unwrap(), val.as_mut().unwrap()))
+        Some((&kv.key, &mut kv.val))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -913,13 +911,12 @@ impl<'a, K, V> DoubleEndedIterator for IterMut<'a, K, V> {
             return None;
         }
 
-        let key = unsafe { &(*self.end).key };
-        let val = unsafe { &mut (*self.end).val };
+        let kv = unsafe { (*self.end).kv.as_mut().unwrap() };
 
         self.len -= 1;
         self.end = unsafe { (*self.end).prev };
 
-        Some((key.as_ref().unwrap(), val.as_mut().unwrap()))
+        Some((&kv.key, &mut kv.val))
     }
 }
 
