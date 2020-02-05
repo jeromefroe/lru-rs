@@ -746,33 +746,6 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     }
 }
 
-impl<K, V, S> Drop for LruCache<K, V, S> {
-    fn drop(&mut self) {
-        // Prevent compiler from trying to drop the un-initialized fields key and val in head
-        // and tail
-        unsafe {
-            let head = *Box::from_raw(self.head);
-            let tail = *Box::from_raw(self.tail);
-
-            let LruEntry {
-                key: head_key,
-                val: head_val,
-                ..
-            } = head;
-            let LruEntry {
-                key: tail_key,
-                val: tail_val,
-                ..
-            } = tail;
-
-            mem::forget(head_key);
-            mem::forget(head_val);
-            mem::forget(tail_key);
-            mem::forget(tail_val);
-        }
-    }
-}
-
 impl<'a, K: Hash + Eq, V, S: BuildHasher> IntoIterator for &'a LruCache<K, V, S> {
     type Item = (&'a K, &'a V);
     type IntoIter = Iter<'a, K, V>;
