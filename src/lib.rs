@@ -278,9 +278,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             None => {
                 let mut node = if self.len() == self.cap() {
                     // if the cache is full, remove the last entry so we can use it for the new key
-                    let old_node = self.remove_last();
-
-                    let mut old_node = match old_node {
+                    let mut old_node = match self.remove_last() {
                         Some(node) => node,
                         // if there is no last node then the capacity of the cache must be 0 so we
                         // can just return None
