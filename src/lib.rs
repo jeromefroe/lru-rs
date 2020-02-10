@@ -278,15 +278,16 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             None => {
                 let mut node = if self.len() == self.cap() {
                     // if the cache is full, remove the last entry so we can use it for the new key
-                    let old_key = KeyRef {
-                        k: unsafe { &(*(*self.tail).prev).kv.as_ref().unwrap().key },
+                    let old_node = self.remove_last();
+
+                    let mut old_node = match old_node {
+                        Some(node) => node,
+                        // if there is no last node then the capacity of the cache must be 0 so we
+                        // can just return None
+                        None => return None,
                     };
-                    let mut old_node = self.map.remove(&old_key).unwrap();
 
                     old_node.kv = Some(KeyVal { key: k, val: v });
-
-                    let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
-                    self.detach(node_ptr);
 
                     old_node
                 } else {
@@ -297,7 +298,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
                 let node_ptr: *mut LruEntry<K, V> = &mut *node;
                 self.attach(node_ptr);
 
-                let keyref = unsafe { &(*node_ptr).kv.as_ref().unwrap().key };
+                let keyref = &node.kv.as_ref().unwrap().key;
                 self.map.insert(KeyRef { k: keyref }, node);
                 None
             }
@@ -454,7 +455,9 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             kv = &(*node).kv;
         }
 
-        Some((&kv.as_ref().unwrap().key, &kv.as_ref().unwrap().val))
+        let kv = kv.as_ref().unwrap();
+
+        Some((&kv.key, &kv.val))
     }
 
     /// Returns a bool indicating whether the given key is in the cache. Does not update the
@@ -750,8 +753,8 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
 impl<K, V, S> Drop for LruCache<K, V, S> {
     fn drop(&mut self) {
         unsafe {
-            ptr::drop_in_place(self.head);
-            ptr::drop_in_place(self.tail);
+            let _head = Box::from_raw(self.head);
+            let _tail = Box::from_raw(self.tail);
         }
     }
 }
@@ -814,11 +817,12 @@ impl<'a, K, V> Iterator for Iter<'a, K, V> {
         }
 
         let kv = unsafe { &(*self.ptr).kv };
+        let kv = kv.as_ref().unwrap();
 
         self.len -= 1;
         self.ptr = unsafe { (*self.ptr).next };
 
-        Some((&kv.as_ref().unwrap().key, &kv.as_ref().unwrap().val))
+        Some((&kv.key, &kv.val))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -837,11 +841,12 @@ impl<'a, K, V> DoubleEndedIterator for Iter<'a, K, V> {
         }
 
         let kv = unsafe { &(*self.end).kv };
+        let kv = kv.as_ref().unwrap();
 
         self.len -= 1;
         self.end = unsafe { (*self.end).prev };
 
-        Some((&kv.as_ref().unwrap().key, &kv.as_ref().unwrap().val))
+        Some((&kv.key, &kv.val))
     }
 }
 
