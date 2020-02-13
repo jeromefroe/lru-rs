@@ -716,8 +716,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     }
 
     fn remove_last(&mut self) -> Option<Box<LruEntry<K, V>>> {
-        let prev;
-        unsafe { prev = (*self.tail).prev }
+        let prev = unsafe { (*self.tail).prev };
         if prev != self.head {
             let old_key = KeyRef {
                 k: unsafe { &(*(*self.tail).prev).kv.as_ref().unwrap().key },
