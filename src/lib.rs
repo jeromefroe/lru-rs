@@ -131,7 +131,7 @@ where
 #[cfg(not(feature = "nightly"))]
 impl<K> Borrow<K> for KeyRef<K> {
     fn borrow(&self) -> &K {
-        unsafe { (&*self.k) }
+        unsafe { &*self.k }
     }
 }
 
@@ -179,8 +179,8 @@ pub struct LruCache<K, V, S = DefaultHasher> {
     cap: usize,
 
     // head and tail are sigil nodes to faciliate inserting entries
-    head: *mut LruEntry<K, V>,
-    tail: *mut LruEntry<K, V>,
+    head: Box<LruEntry<K, V>>,
+    tail: Box<LruEntry<K, V>>,
 }
 
 impl<K: Hash + Eq, V> LruCache<K, V> {
@@ -229,17 +229,15 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     fn construct(cap: usize, map: HashMap<KeyRef<K>, Box<LruEntry<K, V>>, S>) -> LruCache<K, V, S> {
         // NB: The compiler warns that cache does not need to be marked as mutable if we
         // declare it as such since we only mutate it inside the unsafe block.
-        let cache = LruCache {
+        let mut cache = LruCache {
             map,
             cap,
-            head: Box::into_raw(Box::new(LruEntry::new_empty_entry())),
-            tail: Box::into_raw(Box::new(LruEntry::new_empty_entry())),
+            head: Box::new(LruEntry::new_empty_entry()),
+            tail: Box::new(LruEntry::new_empty_entry()),
         };
 
-        unsafe {
-            (*cache.head).next = cache.tail;
-            (*cache.tail).prev = cache.head;
-        }
+        (*cache.head).next = cache.tail.as_mut() as *mut LruEntry<K, V>;
+        (*cache.tail).prev = cache.head.as_mut() as *mut LruEntry<K, V>;
 
         cache
     }
@@ -674,8 +672,8 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     pub fn iter<'a>(&'a self) -> Iter<'a, K, V> {
         Iter {
             len: self.len(),
-            ptr: unsafe { (*self.head).next },
-            end: unsafe { (*self.tail).prev },
+            ptr: self.head.next,
+            end: self.tail.prev,
             phantom: PhantomData,
         }
     }
@@ -709,15 +707,14 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     pub fn iter_mut<'a>(&'a mut self) -> IterMut<'a, K, V> {
         IterMut {
             len: self.len(),
-            ptr: unsafe { (*self.head).next },
-            end: unsafe { (*self.tail).prev },
+            ptr: self.head.next,
+            end: self.tail.prev,
             phantom: PhantomData,
         }
     }
 
     fn remove_last(&mut self) -> Option<Box<LruEntry<K, V>>> {
-        let prev = unsafe { (*self.tail).prev };
-        if prev != self.head {
+        if self.tail.prev != self.head.as_mut() {
             let old_key = KeyRef {
                 k: unsafe { &(*(*self.tail).prev).kv.as_ref().unwrap().key },
             };
@@ -740,18 +737,9 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     fn attach(&mut self, node: *mut LruEntry<K, V>) {
         unsafe {
             (*node).next = (*self.head).next;
-            (*node).prev = self.head;
+            (*node).prev = self.head.as_mut() as *mut LruEntry<K, V>;
             (*self.head).next = node;
             (*(*node).next).prev = node;
-        }
-    }
-}
-
-impl<K, V, S> Drop for LruCache<K, V, S> {
-    fn drop(&mut self) {
-        unsafe {
-            let _head = Box::from_raw(self.head);
-            let _tail = Box::from_raw(self.tail);
         }
     }
 }
