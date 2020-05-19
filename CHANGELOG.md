@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.4.4](https://github.com/jeromefroe/lru-rs/tree/0.4.4) - 2020-05-19
+
+- Use `mem::MaybeUninit` for key and value fields of nodes and not the nodes themselves.
+
 ## [v0.4.3](https://github.com/jeromefroe/lru-rs/tree/0.4.3) - 2019-12-10
 
 - Add back import of alloc crate on nightly which was accidentally removed.
