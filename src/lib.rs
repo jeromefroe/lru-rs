@@ -131,7 +131,7 @@ where
 #[cfg(not(feature = "nightly"))]
 impl<K> Borrow<K> for KeyRef<K> {
     fn borrow(&self) -> &K {
-        unsafe { (&*self.k) }
+        unsafe { &*self.k }
     }
 }
 
@@ -228,8 +228,8 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         let cache = LruCache {
             map,
             cap,
-            head: unsafe { Box::into_raw(Box::new(LruEntry::new_sigil())) },
-            tail: unsafe { Box::into_raw(Box::new(LruEntry::new_sigil())) },
+            head: Box::into_raw(Box::new(LruEntry::new_sigil())),
+            tail: Box::into_raw(Box::new(LruEntry::new_sigil())),
         };
 
         unsafe {
@@ -448,8 +448,8 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         let (key, val);
         unsafe {
             let node = (*self.tail).prev;
-            key = unsafe { &(*(*node).key.as_ptr()) as &K };
-            val = unsafe { &(*(*node).val.as_ptr()) as &V };
+            key = &(*(*node).key.as_ptr()) as &K;
+            val = &(*(*node).val.as_ptr()) as &V;
         }
 
         Some((key, val))
@@ -755,8 +755,8 @@ impl<K, V, S> Drop for LruCache<K, V, S> {
         // We rebox the head/tail, and because these are maybe-uninit
         // they do not have the absent k/v dropped.
         unsafe {
-            let head = *Box::from_raw(self.head);
-            let tail = *Box::from_raw(self.tail);
+            let _head = *Box::from_raw(self.head);
+            let _tail = *Box::from_raw(self.tail);
         }
     }
 }
