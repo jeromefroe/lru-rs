@@ -19,3 +19,4 @@ hashbrown = { version = "0.6.*", optional = true }
 
 [dev-dependencies]
 scoped_threadpool = "0.1.*"
+stats_alloc = "0.1.*"
