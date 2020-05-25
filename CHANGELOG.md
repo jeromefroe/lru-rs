@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.4.5](https://github.com/jeromefroe/lru-rs/tree/0.4.5) - 2020-05-25
+
+- Use `as_mut_ptr` in `drop` to fix memory leak.
+
 ## [v0.4.4](https://github.com/jeromefroe/lru-rs/tree/0.4.4) - 2020-05-19
 
 - Use `mem::MaybeUninit` for key and value fields of nodes and not the nodes themselves.
