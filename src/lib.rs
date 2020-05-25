@@ -14,7 +14,7 @@
 
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 // IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNpubESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
 // AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
@@ -746,11 +746,9 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
 
 impl<K, V, S> Drop for LruCache<K, V, S> {
     fn drop(&mut self) {
-        // iter_mut over the values remaining in the
-        // cache to apply drop to the k/v
         self.map.values_mut().for_each(|e| unsafe {
-            ptr::drop_in_place(&mut e.key as *mut _);
-            ptr::drop_in_place(&mut e.val as *mut _);
+            ptr::drop_in_place(e.key.as_mut_ptr());
+            ptr::drop_in_place(e.val.as_mut_ptr());
         });
         // We rebox the head/tail, and because these are maybe-uninit
         // they do not have the absent k/v dropped.
@@ -942,6 +940,17 @@ mod tests {
     use super::LruCache;
     use core::fmt::Debug;
     use scoped_threadpool::Pool;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    struct DropCounter;
+
+    impl Drop for DropCounter {
+        fn drop(&mut self) {
+            DROP_COUNT.fetch_add(1, Ordering::SeqCst);
+        }
+    }
 
     fn assert_opt_eq<V: PartialEq + Debug>(opt: Option<&V>, v: V) {
         assert!(opt.is_some());
@@ -1500,5 +1509,14 @@ mod tests {
         cache.put(key, "red");
 
         assert_opt_eq(cache.get_mut("apple"), "red");
+    }
+
+    #[test]
+    fn test_no_memory_leaks() {
+        let n = 100;
+        for _ in 0..n {
+            LruCache::new(1).put(0, DropCounter {});
+        }
+        assert_eq!(DROP_COUNT.load(Ordering::SeqCst), n);
     }
 }
