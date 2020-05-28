@@ -57,16 +57,13 @@
 //! ```
 
 #![no_std]
-#![cfg_attr(feature = "nightly", feature(alloc, optin_builtin_traits))]
+#![cfg_attr(feature = "nightly", feature(optin_builtin_traits))]
 
 #[cfg(feature = "hashbrown")]
 extern crate hashbrown;
 
 #[cfg(test)]
 extern crate scoped_threadpool;
-
-#[cfg(not(feature = "nightly"))]
-extern crate std as alloc;
 
 use alloc::borrow::Borrow;
 use alloc::boxed::Box;
@@ -78,16 +75,14 @@ use core::mem;
 use core::ptr;
 use core::usize;
 
-#[cfg(not(feature = "hashbrown"))]
-use alloc::collections::HashMap;
-#[cfg(feature = "hashbrown")]
-use hashbrown::HashMap;
-
-#[cfg(test)]
-#[macro_use]
+#[cfg(any(test, not(feature = "hashbrown")))]
 extern crate std;
 
-#[cfg(feature = "nightly")]
+#[cfg(feature = "hashbrown")]
+use hashbrown::HashMap;
+#[cfg(not(feature = "hashbrown"))]
+use std::collections::HashMap;
+
 extern crate alloc;
 
 // Struct used to hold a reference to a key
@@ -167,7 +162,7 @@ impl<K, V> LruEntry<K, V> {
 #[cfg(feature = "hashbrown")]
 pub type DefaultHasher = hashbrown::hash_map::DefaultHashBuilder;
 #[cfg(not(feature = "hashbrown"))]
-pub type DefaultHasher = alloc::collections::hash_map::RandomState;
+pub type DefaultHasher = std::collections::hash_map::RandomState;
 
 /// An LRU Cache
 pub struct LruCache<K, V, S = DefaultHasher> {
