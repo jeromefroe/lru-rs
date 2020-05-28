@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.5.0](https://github.com/jeromefroe/lru-rs/tree/0.5.0) - 2020-05-28
+
+- Stop gating the `alloc` crate behind the `nightly` flag.
+
 ## [v0.4.5](https://github.com/jeromefroe/lru-rs/tree/0.4.5) - 2020-05-25
 
 - Use `as_mut_ptr` in `drop` to fix memory leak.
