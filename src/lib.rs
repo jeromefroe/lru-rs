@@ -57,16 +57,13 @@
 //! ```
 
 #![no_std]
-#![cfg_attr(feature = "nightly", feature(alloc, optin_builtin_traits))]
+#![cfg_attr(feature = "nightly", feature(optin_builtin_traits))]
 
 #[cfg(feature = "hashbrown")]
 extern crate hashbrown;
 
 #[cfg(test)]
 extern crate scoped_threadpool;
-
-#[cfg(not(feature = "nightly"))]
-extern crate std as alloc;
 
 use alloc::borrow::Borrow;
 use alloc::boxed::Box;
@@ -87,7 +84,6 @@ use hashbrown::HashMap;
 #[macro_use]
 extern crate std;
 
-#[cfg(feature = "nightly")]
 extern crate alloc;
 
 // Struct used to hold a reference to a key
