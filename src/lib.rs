@@ -75,14 +75,13 @@ use core::mem;
 use core::ptr;
 use core::usize;
 
-#[cfg(not(feature = "hashbrown"))]
-use alloc::collections::HashMap;
+#[cfg(any(test, not(feature = "hashbrown")))]
+extern crate std;
+
 #[cfg(feature = "hashbrown")]
 use hashbrown::HashMap;
-
-#[cfg(test)]
-#[macro_use]
-extern crate std;
+#[cfg(not(feature = "hashbrown"))]
+use std::collections::HashMap;
 
 extern crate alloc;
 
@@ -163,7 +162,7 @@ impl<K, V> LruEntry<K, V> {
 #[cfg(feature = "hashbrown")]
 pub type DefaultHasher = hashbrown::hash_map::DefaultHashBuilder;
 #[cfg(not(feature = "hashbrown"))]
-pub type DefaultHasher = alloc::collections::hash_map::RandomState;
+pub type DefaultHasher = std::collections::hash_map::RandomState;
 
 /// An LRU Cache
 pub struct LruCache<K, V, S = DefaultHasher> {
