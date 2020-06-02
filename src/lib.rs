@@ -274,6 +274,12 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
                     };
                     let mut old_node = self.map.remove(&old_key).unwrap();
 
+                    // drop the node's current key and val so we can overwrite them
+                    unsafe {
+                        ptr::drop_in_place(old_node.key.as_mut_ptr());
+                        ptr::drop_in_place(old_node.val.as_mut_ptr());
+                    }
+
                     old_node.key = mem::MaybeUninit::new(k);
                     old_node.val = mem::MaybeUninit::new(v);
 
@@ -1510,8 +1516,11 @@ mod tests {
     fn test_no_memory_leaks() {
         let n = 100;
         for _ in 0..n {
-            LruCache::new(1).put(0, DropCounter {});
+            let mut cache = LruCache::new(1);
+            for i in 0..n {
+                cache.put(i, DropCounter {});
+            }
         }
-        assert_eq!(DROP_COUNT.load(Ordering::SeqCst), n);
+        assert_eq!(DROP_COUNT.load(Ordering::SeqCst), n * n);
     }
 }
