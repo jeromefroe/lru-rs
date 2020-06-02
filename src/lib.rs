@@ -275,7 +275,6 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
                     let mut old_node = self.map.remove(&old_key).unwrap();
 
                     // drop the node's current key and val so we can overwrite them
-                    // old_node.key.
                     unsafe {
                         ptr::drop_in_place(old_node.key.as_mut_ptr());
                         ptr::drop_in_place(old_node.val.as_mut_ptr());
