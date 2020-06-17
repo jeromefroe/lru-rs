@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.5.2](https://github.com/jeromefroe/lru-rs/tree/0.5.2) - 2020-06-17
+
+- Fix nightly feature.
+
 ## [v0.5.1](https://github.com/jeromefroe/lru-rs/tree/0.5.1) - 2020-06-02
 
 - Fix memory leak whereby old entries wouldn't be dropped when cache is full.
