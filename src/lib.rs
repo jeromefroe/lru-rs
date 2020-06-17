@@ -57,7 +57,7 @@
 //! ```
 
 #![no_std]
-#![cfg_attr(feature = "nightly", feature(optin_builtin_traits))]
+#![cfg_attr(feature = "nightly", feature(negative_impls, optin_builtin_traits))]
 
 #[cfg(feature = "hashbrown")]
 extern crate hashbrown;
@@ -119,7 +119,7 @@ where
     D: NotKeyRef + ?Sized,
 {
     fn borrow(&self) -> &D {
-        unsafe { (&*self.k) }.borrow()
+        unsafe { &*self.k }.borrow()
     }
 }
 
@@ -1509,7 +1509,7 @@ mod tests {
         let key = String::from("apple");
         cache.put(key, "red");
 
-        assert_opt_eq(cache.get_mut("apple"), "red");
+        assert_opt_eq_mut(cache.get_mut("apple"), "red");
     }
 
     #[test]
