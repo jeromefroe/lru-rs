@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.5.3](https://github.com/jeromefroe/lru-rs/tree/0.5.3) - 2020-07-06
+
+- Fix bug that causes crash when putting an item into a zero-capacity cache.
+
 ## [v0.5.2](https://github.com/jeromefroe/lru-rs/tree/0.5.2) - 2020-06-17
 
 - Fix nightly feature.
