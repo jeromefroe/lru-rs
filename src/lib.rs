@@ -267,6 +267,11 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
                 Some(v)
             }
             None => {
+                // if the capacity is zero, do nothing
+                if self.cap() == 0 {
+                    return None;
+                }
+
                 let mut node = if self.len() == self.cap() {
                     // if the cache is full, remove the last entry so we can use it for the new key
                     let old_key = KeyRef {
@@ -1522,5 +1527,11 @@ mod tests {
             }
         }
         assert_eq!(DROP_COUNT.load(Ordering::SeqCst), n * n);
+    }
+
+    #[test]
+    fn test_zero_cap_no_crash() {
+        let mut cache = LruCache::new(0);
+        cache.put("reizeiin", "tohka");
     }
 }
