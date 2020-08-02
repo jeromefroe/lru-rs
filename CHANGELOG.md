@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.6.0](https://github.com/jeromefroe/lru-rs/tree/0.6.0) - 2020-08-02
+
+- Update dependency on hashbrown to 0.8.
+
 ## [v0.5.3](https://github.com/jeromefroe/lru-rs/tree/0.5.3) - 2020-07-06
 
 - Fix bug that causes crash when putting an item into a zero-capacity cache.
