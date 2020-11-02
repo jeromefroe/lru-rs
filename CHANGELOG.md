@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.7.0](https://github.com/jeromefroe/lru-rs/tree/0.7.0) - 2020-11-02
+
+- Update dependency on hashbrown to 0.9.
+
 ## [v0.6.0](https://github.com/jeromefroe/lru-rs/tree/0.6.0) - 2020-08-02
 
 - Update dependency on hashbrown to 0.8.
