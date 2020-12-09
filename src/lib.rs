@@ -57,7 +57,7 @@
 //! ```
 
 #![no_std]
-#![cfg_attr(feature = "nightly", feature(negative_impls, optin_builtin_traits))]
+#![cfg_attr(feature = "nightly", feature(negative_impls, auto_traits))]
 
 #[cfg(feature = "hashbrown")]
 extern crate hashbrown;
