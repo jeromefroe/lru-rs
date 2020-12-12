@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.6.2](https://github.com/jeromefroe/lru-rs/tree/0.6.2) - 2020-12-12
+
+- Rename `optin_builtin_traits` to `auto_traits`.
+
 ## [v0.6.1](https://github.com/jeromefroe/lru-rs/tree/0.6.1) - 2020-11-02
 
 - Update dependency on hashbrown to 0.9.
