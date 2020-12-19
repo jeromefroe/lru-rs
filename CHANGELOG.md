@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.6.3](https://github.com/jeromefroe/lru-rs/tree/0.6.3) - 2020-12-19
+
+- Fix memory leak in `clear` and `resize` methods.
+
 ## [v0.6.2](https://github.com/jeromefroe/lru-rs/tree/0.6.2) - 2020-12-12
 
 - Rename `optin_builtin_traits` to `auto_traits`.
