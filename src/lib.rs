@@ -948,16 +948,6 @@ mod tests {
     use scoped_threadpool::Pool;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
-
-    struct DropCounter;
-
-    impl Drop for DropCounter {
-        fn drop(&mut self) {
-            DROP_COUNT.fetch_add(1, Ordering::SeqCst);
-        }
-    }
-
     fn assert_opt_eq<V: PartialEq + Debug>(opt: Option<&V>, v: V) {
         assert!(opt.is_some());
         assert_eq!(opt.unwrap(), &v);
@@ -1519,6 +1509,16 @@ mod tests {
 
     #[test]
     fn test_no_memory_leaks() {
+        static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+        struct DropCounter;
+
+        impl Drop for DropCounter {
+            fn drop(&mut self) {
+                DROP_COUNT.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
         let n = 100;
         for _ in 0..n {
             let mut cache = LruCache::new(1);
@@ -1531,6 +1531,16 @@ mod tests {
 
     #[test]
     fn test_no_memory_leaks_with_clear() {
+        static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+        struct DropCounter;
+
+        impl Drop for DropCounter {
+            fn drop(&mut self) {
+                DROP_COUNT.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
         let n = 100;
         for _ in 0..n {
             let mut cache = LruCache::new(1);
@@ -1544,6 +1554,16 @@ mod tests {
 
     #[test]
     fn test_no_memory_leaks_with_resize() {
+        static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+        struct DropCounter;
+
+        impl Drop for DropCounter {
+            fn drop(&mut self) {
+                DROP_COUNT.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
         let n = 100;
         for _ in 0..n {
             let mut cache = LruCache::new(1);
