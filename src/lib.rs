@@ -657,7 +657,8 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         }
     }
 
-    /// An iterator visiting all entries in order. The iterator element type is `(&'a K, &'a V)`.
+    /// An iterator visiting all entries in most-recently used order. The iterator element type is
+    /// `(&'a K, &'a V)`.
     ///
     /// # Examples
     ///
@@ -682,8 +683,8 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         }
     }
 
-    /// An iterator visiting all entries in order, giving a mutable reference on V.
-    /// The iterator element type is `(&'a K, &'a mut V)`.
+    /// An iterator visiting all entries in most-recently-used order, giving a mutable reference on
+    /// V.  The iterator element type is `(&'a K, &'a mut V)`.
     ///
     /// # Examples
     ///
