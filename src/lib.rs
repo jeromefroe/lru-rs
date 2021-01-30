@@ -510,6 +510,9 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         match self.map.remove(&k) {
             None => None,
             Some(mut old_node) => {
+                unsafe {
+                    ptr::drop_in_place(old_node.key.as_mut_ptr());
+                }
                 let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
                 self.detach(node_ptr);
                 unsafe { Some(old_node.val.assume_init()) }
@@ -1574,6 +1577,38 @@ mod tests {
             cache.resize(0);
         }
         assert_eq!(DROP_COUNT.load(Ordering::SeqCst), n * n);
+    }
+
+    #[test]
+    fn test_no_memory_leaks_with_pop() {
+        static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+        #[derive(Hash, Eq)]
+        struct KeyDropCounter(usize);
+
+        impl PartialEq for KeyDropCounter {
+            fn eq(&self, other: &Self) -> bool {
+                self.0.eq(&other.0)
+            }
+        }
+
+        impl Drop for KeyDropCounter {
+            fn drop(&mut self) {
+                DROP_COUNT.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let n = 100;
+        for _ in 0..n {
+            let mut cache = LruCache::new(1);
+
+            for i in 0..100 {
+                cache.put(KeyDropCounter(i), i);
+                cache.pop(&KeyDropCounter(i));
+            }
+        }
+
+        assert_eq!(DROP_COUNT.load(Ordering::SeqCst), n * n * 2);
     }
 
     #[test]
