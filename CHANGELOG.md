@@ -1,5 +1,10 @@
 # Changelog
 
+## [v0.6.4](https://github.com/jeromefroe/lru-rs/tree/0.6.4) - 2020-02-03
+
+- Fix memory leak when keys contain heap allocated data and ensure send/sync bounds apply to
+  all conforming hashers.
+
 ## [v0.6.3](https://github.com/jeromefroe/lru-rs/tree/0.6.3) - 2020-12-19
 
 - Fix memory leak in `clear` and `resize` methods.
