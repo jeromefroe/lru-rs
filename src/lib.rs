@@ -202,7 +202,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
 
 impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// Creates a new LRU Cache that holds at most `cap` items and
-    /// uses the providedash builder to hash keys.
+    /// uses the provided hash builder to hash keys.
     ///
     /// # Example
     ///
@@ -214,6 +214,21 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// ```
     pub fn with_hasher(cap: usize, hash_builder: S) -> LruCache<K, V, S> {
         LruCache::construct(cap, HashMap::with_capacity_and_hasher(cap, hash_builder))
+    }
+
+    /// Creates a new LRU Cache that never automatically evicts items and
+    /// uses the provided hash builder to hash keys.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::{LruCache, DefaultHasher};
+    ///
+    /// let s = DefaultHasher::default();
+    /// let mut cache: LruCache<isize, &str> = LruCache::unbounded_with_hasher(s);
+    /// ```
+    pub fn unbounded_with_hasher(hash_builder: S) -> LruCache<K, V, S> {
+        LruCache::construct(usize::MAX, HashMap::with_hasher(hash_builder))
     }
 
     /// Creates a new LRU Cache with the given capacity.
