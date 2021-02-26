@@ -1,10 +1,10 @@
 # Changelog
 
-## [v0.6.6](https://github.com/jeromefroe/lru-rs/tree/0.6.5) - 2020-02-12
+## [v0.6.6](https://github.com/jeromefroe/lru-rs/tree/0.6.5) - 2021-02-12
 
 - Add `unbounded_with_hasher` constructor.
 
-## [v0.6.4](https://github.com/jeromefroe/lru-rs/tree/0.6.4) - 2020-02-03
+## [v0.6.4](https://github.com/jeromefroe/lru-rs/tree/0.6.4) - 2021-02-03
 
 - Fix memory leak when keys contain heap allocated data and ensure send/sync bounds apply to
   all conforming hashers.
