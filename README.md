@@ -56,7 +56,7 @@ fn main() {
 [crates.io package]: https://crates.io/crates/lru/
 [documentation]: https://docs.rs/lru/
 [docs.rs badge]: https://docs.rs/lru/badge.svg
-[docs.rs documentation]: (https://docs.rs/lru/)
+[docs.rs documentation]: https://docs.rs/lru/
 [license badge]: https://img.shields.io/badge/license-MIT-blue.svg
-[license]: (https://raw.githubusercontent.com/jeromefroe/lru-rs/master/LICENSE)
+[license]: https://raw.githubusercontent.com/jeromefroe/lru-rs/master/LICENSE
 [lru cache implementation in an earlier version of rust's std::collections crate]: https://doc.rust-lang.org/0.12.0/std/collections/lru_cache/struct.LruCache.html
