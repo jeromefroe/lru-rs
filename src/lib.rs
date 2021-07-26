@@ -413,10 +413,9 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         KeyRef<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        match self.map.get(k) {
-            None => None,
-            Some(node) => Some(unsafe { &(*(*node).val.as_ptr()) as &V }),
-        }
+        self.map
+            .get(k)
+            .map(|node| unsafe { &(*(*node).val.as_ptr()) as &V })
     }
 
     /// Returns a mutable reference to the value corresponding to the key in the cache or `None`
@@ -461,8 +460,8 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     ///
     /// assert_eq!(cache.peek_lru(), Some((&1, &"a")));
     /// ```
-    pub fn peek_lru<'a>(&'a self) -> Option<(&'a K, &'a V)> {
-        if self.len() == 0 {
+    pub fn peek_lru<'a>(&'_ self) -> Option<(&'a K, &'a V)> {
+        if self.is_empty() {
             return None;
         }
 
@@ -522,7 +521,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         KeyRef<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        match self.map.remove(&k) {
+        match self.map.remove(k) {
             None => None,
             Some(mut old_node) => {
                 unsafe {
@@ -667,12 +666,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// assert_eq!(cache.len(), 0);
     /// ```
     pub fn clear(&mut self) {
-        loop {
-            match self.pop_lru() {
-                Some(_) => (),
-                None => break,
-            }
-        }
+        while self.pop_lru().is_some() {}
     }
 
     /// An iterator visiting all entries in most-recently used order. The iterator element type is
@@ -692,7 +686,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     ///     println!("key: {} val: {}", key, val);
     /// }
     /// ```
-    pub fn iter<'a>(&'a self) -> Iter<'a, K, V> {
+    pub fn iter<'a>(&'_ self) -> Iter<'a, K, V> {
         Iter {
             len: self.len(),
             ptr: unsafe { (*self.head).next },
@@ -727,7 +721,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     ///     }
     /// }
     /// ```
-    pub fn iter_mut<'a>(&'a mut self) -> IterMut<'a, K, V> {
+    pub fn iter_mut<'a>(&'_ mut self) -> IterMut<'a, K, V> {
         IterMut {
             len: self.len(),
             ptr: unsafe { (*self.head).next },
