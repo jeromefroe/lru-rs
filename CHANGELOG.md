@@ -1,6 +1,10 @@
 # Changelog
 
-## [v0.6.6](https://github.com/jeromefroe/lru-rs/tree/0.6.5) - 2021-02-12
+## [v0.6.6](https://github.com/jeromefroe/lru-rs/tree/0.6.6) - 2021-07-28
+
+- Update dependency on hashbrown to 0.11.2.
+
+## [v0.6.5](https://github.com/jeromefroe/lru-rs/tree/0.6.5) - 2021-02-12
 
 - Add `unbounded_with_hasher` constructor.
 
