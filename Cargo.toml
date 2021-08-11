@@ -13,6 +13,7 @@ keywords = ["LRU", "cache"]
 [features]
 default = ["hashbrown"]
 nightly = ["hashbrown", "hashbrown/nightly"]
+compile-time-rng = ["hashbrown", "hashbrown/ahash-compile-time-rng"]
 
 [dependencies]
 hashbrown = { version = "0.11.2", optional = true }
