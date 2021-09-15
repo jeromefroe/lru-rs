@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.7.0](https://github.com/jeromefroe/lru-rs/tree/0.7.0) - 2021-09-14
+
+- Explicitly implement Borrow for String and Vec types for non-nightly.
+
 ## [v0.6.6](https://github.com/jeromefroe/lru-rs/tree/0.6.6) - 2021-07-28
 
 - Update dependency on hashbrown to 0.11.2.
