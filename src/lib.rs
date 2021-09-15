@@ -26,7 +26,7 @@
 //!
 //! ## Example
 //!
-//! ```rust,no_run
+//! ```rust
 //! extern crate lru;
 //!
 //! use lru::LruCache;
@@ -126,6 +126,20 @@ where
 #[cfg(not(feature = "nightly"))]
 impl<K> Borrow<K> for KeyRef<K> {
     fn borrow(&self) -> &K {
+        unsafe { &*self.k }
+    }
+}
+
+#[cfg(not(feature = "nightly"))]
+impl Borrow<str> for KeyRef<alloc::string::String> {
+    fn borrow(&self) -> &str {
+        unsafe { &*self.k }
+    }
+}
+
+#[cfg(not(feature = "nightly"))]
+impl<T> Borrow<[T]> for KeyRef<alloc::vec::Vec<T>> {
+    fn borrow(&self) -> &[T] {
         unsafe { &*self.k }
     }
 }
@@ -1495,7 +1509,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "nightly")]
     fn test_get_with_borrow() {
         use alloc::string::String;
 
@@ -1508,7 +1521,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "nightly")]
     fn test_get_mut_with_borrow() {
         use alloc::string::String;
 
