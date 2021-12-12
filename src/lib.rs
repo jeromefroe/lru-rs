@@ -684,7 +684,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     }
 
     /// An iterator visiting all entries in most-recently used order. The iterator element type is
-    /// `(&'a K, &'a V)`.
+    /// `(&K, &V)`.
     ///
     /// # Examples
     ///
@@ -700,7 +700,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     ///     println!("key: {} val: {}", key, val);
     /// }
     /// ```
-    pub fn iter<'a>(&'_ self) -> Iter<'a, K, V> {
+    pub fn iter(&self) -> Iter<'_, K, V> {
         Iter {
             len: self.len(),
             ptr: unsafe { (*self.head).next },
@@ -710,7 +710,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     }
 
     /// An iterator visiting all entries in most-recently-used order, giving a mutable reference on
-    /// V.  The iterator element type is `(&'a K, &'a mut V)`.
+    /// V.  The iterator element type is `(&K, &mut V)`.
     ///
     /// # Examples
     ///
@@ -735,7 +735,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     ///     }
     /// }
     /// ```
-    pub fn iter_mut<'a>(&'_ mut self) -> IterMut<'a, K, V> {
+    pub fn iter_mut(&mut self) -> IterMut<'_, K, V> {
         IterMut {
             len: self.len(),
             ptr: unsafe { (*self.head).next },
