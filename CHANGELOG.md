@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.7.1](https://github.com/jeromefroe/lru-rs/tree/0.7.1) - 2021-12-18
+
+- Fix lifetime of iterators.
+
 ## [v0.7.0](https://github.com/jeromefroe/lru-rs/tree/0.7.0) - 2021-09-14
 
 - Explicitly implement Borrow for String and Vec types for non-nightly.
