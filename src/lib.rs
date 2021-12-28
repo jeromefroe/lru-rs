@@ -138,6 +138,13 @@ impl Borrow<str> for KeyRef<alloc::string::String> {
 }
 
 #[cfg(not(feature = "nightly"))]
+impl<T: ?Sized> Borrow<T> for KeyRef<Box<T>> {
+    fn borrow(&self) -> &T {
+        unsafe { &*self.k }
+    }
+}
+
+#[cfg(not(feature = "nightly"))]
 impl<T> Borrow<[T]> for KeyRef<alloc::vec::Vec<T>> {
     fn borrow(&self) -> &[T] {
         unsafe { &*self.k }
