@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.7.2](https://github.com/jeromefroe/lru-rs/tree/0.7.2) - 2021-12-28
+
+- Explicitly implement Borrow for Box for non-nightly.
+
 ## [v0.7.1](https://github.com/jeromefroe/lru-rs/tree/0.7.1) - 2021-12-18
 
 - Fix lifetime of iterators.
