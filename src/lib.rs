@@ -308,30 +308,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
                     return None;
                 }
 
-                let mut node = if self.len() == self.cap() {
-                    // if the cache is full, remove the last entry so we can use it for the new key
-                    let old_key = KeyRef {
-                        k: unsafe { &(*(*(*self.tail).prev).key.as_ptr()) },
-                    };
-                    let mut old_node = self.map.remove(&old_key).unwrap();
-
-                    // drop the node's current key and val so we can overwrite them
-                    unsafe {
-                        ptr::drop_in_place(old_node.key.as_mut_ptr());
-                        ptr::drop_in_place(old_node.val.as_mut_ptr());
-                    }
-
-                    old_node.key = mem::MaybeUninit::new(k);
-                    old_node.val = mem::MaybeUninit::new(v);
-
-                    let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
-                    self.detach(node_ptr);
-
-                    old_node
-                } else {
-                    // if the cache is not full allocate a new LruEntry
-                    Box::new(LruEntry::new(k, v))
-                };
+                let mut node = self.replace_or_create_node(k, v);
 
                 let node_ptr: *mut LruEntry<K, V> = &mut *node;
                 self.attach(node_ptr);
@@ -340,6 +317,35 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
                 self.map.insert(KeyRef { k: keyref }, node);
                 None
             }
+        }
+    }
+
+    // Used internally to swap out a node if the cache is full or to create a new node if if space
+    // is available. Shared between `put` and `get_or_insert`.
+    fn replace_or_create_node(&mut self, k: K, v: V) -> Box<LruEntry<K, V>> {
+        if self.len() == self.cap() {
+            // if the cache is full, remove the last entry so we can use it for the new key
+            let old_key = KeyRef {
+                k: unsafe { &(*(*(*self.tail).prev).key.as_ptr()) },
+            };
+            let mut old_node = self.map.remove(&old_key).unwrap();
+
+            // drop the node's current key and val so we can overwrite them
+            unsafe {
+                ptr::drop_in_place(old_node.key.as_mut_ptr());
+                ptr::drop_in_place(old_node.val.as_mut_ptr());
+            }
+
+            old_node.key = mem::MaybeUninit::new(k);
+            old_node.val = mem::MaybeUninit::new(v);
+
+            let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
+            self.detach(node_ptr);
+
+            old_node
+        } else {
+            // if the cache is not full allocate a new LruEntry
+            Box::new(LruEntry::new(k, v))
         }
     }
 
@@ -455,30 +461,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
                 return None
             }
             let v = f();
-            let mut node = if self.len() == self.cap(){
-                // if the cache is full, remove the last entry so we can use it for the new key
-                let old_key = KeyRef {
-                    k: unsafe { &(*(*(*self.tail).prev).key.as_ptr()) },
-                };
-                let mut old_node = self.map.remove(&old_key).unwrap();
-
-                // drop the node's current key and val so we can overwrite them
-                unsafe {
-                    ptr::drop_in_place(old_node.key.as_mut_ptr());
-                    ptr::drop_in_place(old_node.val.as_mut_ptr());
-                }
-
-                old_node.key = mem::MaybeUninit::new(k);
-                old_node.val = mem::MaybeUninit::new(v);
-
-                let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
-                self.detach(node_ptr);
-
-                old_node
-            } else {
-                // if the cache is not full allocate a new LruEntry
-                Box::new(LruEntry::new(k, v))
-            };
+            let mut node = self.replace_or_create_node(k, v);
 
             let node_ptr: *mut LruEntry<K, V> = &mut *node;
             self.attach(node_ptr);
