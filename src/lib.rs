@@ -308,30 +308,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
                     return None;
                 }
 
-                let mut node = if self.len() == self.cap() {
-                    // if the cache is full, remove the last entry so we can use it for the new key
-                    let old_key = KeyRef {
-                        k: unsafe { &(*(*(*self.tail).prev).key.as_ptr()) },
-                    };
-                    let mut old_node = self.map.remove(&old_key).unwrap();
-
-                    // drop the node's current key and val so we can overwrite them
-                    unsafe {
-                        ptr::drop_in_place(old_node.key.as_mut_ptr());
-                        ptr::drop_in_place(old_node.val.as_mut_ptr());
-                    }
-
-                    old_node.key = mem::MaybeUninit::new(k);
-                    old_node.val = mem::MaybeUninit::new(v);
-
-                    let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
-                    self.detach(node_ptr);
-
-                    old_node
-                } else {
-                    // if the cache is not full allocate a new LruEntry
-                    Box::new(LruEntry::new(k, v))
-                };
+                let mut node = self.replace_or_create_node(k, v);
 
                 let node_ptr: *mut LruEntry<K, V> = &mut *node;
                 self.attach(node_ptr);
@@ -340,6 +317,35 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
                 self.map.insert(KeyRef { k: keyref }, node);
                 None
             }
+        }
+    }
+
+    // Used internally to swap out a node if the cache is full or to create a new node if if space
+    // is available. Shared between `put` and `get_or_insert`.
+    fn replace_or_create_node(&mut self, k: K, v: V) -> Box<LruEntry<K, V>> {
+        if self.len() == self.cap() {
+            // if the cache is full, remove the last entry so we can use it for the new key
+            let old_key = KeyRef {
+                k: unsafe { &(*(*(*self.tail).prev).key.as_ptr()) },
+            };
+            let mut old_node = self.map.remove(&old_key).unwrap();
+
+            // drop the node's current key and val so we can overwrite them
+            unsafe {
+                ptr::drop_in_place(old_node.key.as_mut_ptr());
+                ptr::drop_in_place(old_node.val.as_mut_ptr());
+            }
+
+            old_node.key = mem::MaybeUninit::new(k);
+            old_node.val = mem::MaybeUninit::new(v);
+
+            let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
+            self.detach(node_ptr);
+
+            old_node
+        } else {
+            // if the cache is not full allocate a new LruEntry
+            Box::new(LruEntry::new(k, v))
         }
     }
 
@@ -410,6 +416,59 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             Some(unsafe { &mut (*(*node_ptr).val.as_mut_ptr()) as &mut V })
         } else {
             None
+        }
+    }
+
+    /// Returns a reference to the value of the key in the cache if it is
+    /// present in the cache and moves the key to the head of the LRU list.
+    /// If the key does not exist the provided `Fn` is used to populate the list and a reference
+    /// is returned.
+    ///
+    /// This method will only return `None` when the capacity of the cache is 0 and no entries
+    /// can be populated.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// cache.put(1, "a");
+    /// cache.put(2, "b");
+    /// cache.put(2, "c");
+    /// cache.put(3, "d");
+    ///
+    /// assert_eq!(cache.get_or_insert(2, ||"a"), Some(&"c"));
+    /// assert_eq!(cache.get_or_insert(3, ||"a"), Some(&"d"));
+    /// assert_eq!(cache.get_or_insert(1, ||"a"), Some(&"a"));
+    /// assert_eq!(cache.get_or_insert(1, ||"b"), Some(&"a"));
+    /// ```
+    pub fn get_or_insert<'a, F>(&mut self, k: K, f: F) -> Option<&'a V>
+        where
+            F: Fn() -> V,
+    {
+        if let Some(node) = self.map.get_mut(&k) {
+            let node_ptr: *mut LruEntry<K, V> = &mut **node;
+
+            self.detach(node_ptr);
+            self.attach(node_ptr);
+
+            Some(unsafe { &(*(*node_ptr).val.as_ptr()) as &V })
+        } else {
+            // If the capacity is 0 we do nothing,
+            // this is the only circumstance that should return None
+            if self.cap() == 0 {
+                return None
+            }
+            let v = f();
+            let mut node = self.replace_or_create_node(k, v);
+
+            let node_ptr: *mut LruEntry<K, V> = &mut *node;
+            self.attach(node_ptr);
+
+            let keyref = unsafe { (*node_ptr).key.as_ptr() };
+            self.map.insert(KeyRef { k: keyref }, node);
+            Some(unsafe { &(*(*node_ptr).val.as_ptr()) as &V })
         }
     }
 
@@ -1048,6 +1107,23 @@ mod tests {
         assert!(!cache.is_empty());
         assert_opt_eq(cache.get(&"apple"), "red");
         assert_opt_eq(cache.get(&"banana"), "yellow");
+    }
+
+    #[test]
+    fn test_put_and_get_or_insert() {
+        let mut cache = LruCache::new(2);
+        assert!(cache.is_empty());
+
+        assert_eq!(cache.put("apple", "red"), None);
+        assert_eq!(cache.put("banana", "yellow"), None);
+
+        assert_eq!(cache.cap(), 2);
+        assert_eq!(cache.len(), 2);
+        assert!(!cache.is_empty());
+        assert_opt_eq(cache.get_or_insert(&"apple", ||"orange"), &"red");
+        assert_opt_eq(cache.get_or_insert(&"banana", ||"orange"), &"yellow");
+        assert_opt_eq(cache.get_or_insert(&"lemon", ||"orange"), &"orange");
+        assert_opt_eq(cache.get_or_insert(&"lemon", ||"red"), &"orange");
     }
 
     #[test]
