@@ -443,7 +443,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// assert_eq!(cache.get_or_insert(1, ||"a"), Some(&"a"));
     /// assert_eq!(cache.get_or_insert(1, ||"b"), Some(&"a"));
     /// ```
-    pub fn get_or_insert<'a, F>(&mut self, k: K, f: F) -> Option<&'a V>
+    pub fn get_or_insert<'a, F>(&'a mut self, k: K, f: F) -> Option<&'a V>
         where
             F: Fn() -> V,
     {
