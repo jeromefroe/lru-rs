@@ -1034,6 +1034,52 @@ impl<'a, K, V> FusedIterator for IterMut<'a, K, V> {}
 unsafe impl<'a, K: Send, V: Send> Send for IterMut<'a, K, V> {}
 unsafe impl<'a, K: Sync, V: Sync> Sync for IterMut<'a, K, V> {}
 
+/// An iterator that moves out of a `LruCache`.
+///
+/// This `struct` is created by the [`into_iter`] method on [`LruCache`][`LruCache`]. See its
+/// documentation for more.
+///
+/// [`into_iter`]: struct.LruCache.html#method.into_iter
+/// [`LruCache`]: struct.LruCache.html
+pub struct IntoIter<K, V>
+where
+    K: Hash + Eq,
+{
+    cache: LruCache<K, V>,
+}
+
+impl<K, V> Iterator for IntoIter<K, V>
+where
+    K: Hash + Eq,
+{
+    type Item = (K, V);
+
+    fn next(&mut self) -> Option<(K, V)> {
+        self.cache.pop_lru()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.cache.len();
+        (len, Some(len))
+    }
+
+    fn count(self) -> usize {
+        self.cache.len()
+    }
+}
+
+impl<K, V> ExactSizeIterator for IntoIter<K, V> where K: Hash + Eq {}
+impl<K, V> FusedIterator for IntoIter<K, V> where K: Hash + Eq  {}
+
+impl<K: Hash + Eq, V> IntoIterator for LruCache<K, V> {
+    type Item = (K, V);
+    type IntoIter = IntoIter<K, V>;
+
+    fn into_iter(self) -> IntoIter<K, V> {
+        IntoIter{cache: self}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::LruCache;
@@ -1566,6 +1612,27 @@ mod tests {
         assert_eq!(iter.next(), None);
         assert_eq!(iter_clone.len(), 0);
         assert_eq!(iter_clone.next(), None);
+    }
+
+    #[test]
+    fn test_into_iter() {
+        let mut cache = LruCache::new(3);
+        cache.put("a", 1);
+        cache.put("b", 2);
+        cache.put("c", 3);
+
+        let mut iter = cache.into_iter();
+        assert_eq!(iter.len(), 3);
+        assert_eq!(iter.next(), Some(("a", 1)));
+
+        assert_eq!(iter.len(), 2);
+        assert_eq!(iter.next(), Some(("b", 2)));
+
+        assert_eq!(iter.len(), 1);
+        assert_eq!(iter.next(), Some(("c", 3)));
+
+        assert_eq!(iter.len(), 0);
+        assert_eq!(iter.next(), None);
     }
 
     #[test]
