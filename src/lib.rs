@@ -308,7 +308,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
                     return None;
                 }
 
-                let mut node = self.replace_or_create_node(k, v);
+                let (_, mut node) = self.replace_or_create_node(k, v);
 
                 let node_ptr: *mut LruEntry<K, V> = &mut *node;
                 self.attach(node_ptr);
@@ -320,9 +320,66 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         }
     }
 
-    // Used internally to swap out a node if the cache is full or to create a new node if if space
-    // is available. Shared between `put` and `get_or_insert`.
-    fn replace_or_create_node(&mut self, k: K, v: V) -> Box<LruEntry<K, V>> {
+    /// Pushes a key-value pair into the cache. If an entry with key `k` already exists in the cache or
+    /// another cache entry is removed (due to the lru's capacity), 
+    /// then it returns the old entry's value. Otherwise, returns `None`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// assert_eq!(None, cache.push(1, "a"));
+    /// assert_eq!(None, cache.push(2, "b"));
+    /// 
+    /// // This push call returns "b" because that was the previous value for 2's entry.
+    /// assert_eq!(Some("b"), cache.push(2, "beta"));
+    /// 
+    /// // This push call returns "a" because the cache is at capacity and "a" was the lru value.
+    /// assert_eq!(Some("a"), cache.push(3, "alpha"));
+    ///
+    /// assert_eq!(cache.get(&1), None);
+    /// assert_eq!(cache.get(&2), Some(&"beta"));
+    /// assert_eq!(cache.get(&3), Some(&"alpha"));
+    /// ```
+    pub fn push(&mut self, k: K, mut v: V) -> Option<V> {
+        let node_ptr = self.map.get_mut(&KeyRef { k: &k }).map(|node| {
+            let node_ptr: *mut LruEntry<K, V> = &mut **node;
+            node_ptr
+        });
+
+        match node_ptr {
+            Some(node_ptr) => {
+                // if the key is already in the cache just update its value and move it to the
+                // front of the list
+                unsafe { mem::swap(&mut v, &mut (*(*node_ptr).val.as_mut_ptr()) as &mut V) }
+                self.detach(node_ptr);
+                self.attach(node_ptr);
+                Some(v)
+            }
+            None => {
+                // if the capacity is zero, do nothing
+                if self.cap() == 0 {
+                    return None;
+                }
+
+                let (replaced, mut node) = self.replace_or_create_node(k, v);
+
+                let node_ptr: *mut LruEntry<K, V> = &mut *node;
+                self.attach(node_ptr);
+
+                let keyref = unsafe { (*node_ptr).key.as_ptr() };
+                self.map.insert(KeyRef { k: keyref }, node);
+
+                replaced
+            }
+        }
+    }
+
+    // Used internally to swap out a node if the cache is full or to create a new node if space
+    // is available. Shared between `put`, `push`, and `get_or_insert`.
+    fn replace_or_create_node(&mut self, k: K, v: V) -> (Option<V>, Box<LruEntry<K, V>>) {
         if self.len() == self.cap() {
             // if the cache is full, remove the last entry so we can use it for the new key
             let old_key = KeyRef {
@@ -330,22 +387,25 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             };
             let mut old_node = self.map.remove(&old_key).unwrap();
 
-            // drop the node's current key and val so we can overwrite them
+            // drop the node's current key and and overwrite it
             unsafe {
                 ptr::drop_in_place(old_node.key.as_mut_ptr());
-                ptr::drop_in_place(old_node.val.as_mut_ptr());
             }
 
             old_node.key = mem::MaybeUninit::new(k);
+
+            // replace the node's current val and overwrite it
+            let replaced = unsafe { old_node.val.assume_init() };
+
             old_node.val = mem::MaybeUninit::new(v);
 
             let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
             self.detach(node_ptr);
 
-            old_node
+            (Some(replaced), old_node)
         } else {
             // if the cache is not full allocate a new LruEntry
-            Box::new(LruEntry::new(k, v))
+            (None, Box::new(LruEntry::new(k, v)))
         }
     }
 
@@ -444,8 +504,8 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// assert_eq!(cache.get_or_insert(1, ||"b"), Some(&"a"));
     /// ```
     pub fn get_or_insert<'a, F>(&'a mut self, k: K, f: F) -> Option<&'a V>
-        where
-            F: Fn() -> V,
+    where
+        F: Fn() -> V,
     {
         if let Some(node) = self.map.get_mut(&k) {
             let node_ptr: *mut LruEntry<K, V> = &mut **node;
@@ -458,10 +518,10 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             // If the capacity is 0 we do nothing,
             // this is the only circumstance that should return None
             if self.cap() == 0 {
-                return None
+                return None;
             }
             let v = f();
-            let mut node = self.replace_or_create_node(k, v);
+            let (_, mut node) = self.replace_or_create_node(k, v);
 
             let node_ptr: *mut LruEntry<K, V> = &mut *node;
             self.attach(node_ptr);
@@ -1120,10 +1180,10 @@ mod tests {
         assert_eq!(cache.cap(), 2);
         assert_eq!(cache.len(), 2);
         assert!(!cache.is_empty());
-        assert_opt_eq(cache.get_or_insert(&"apple", ||"orange"), &"red");
-        assert_opt_eq(cache.get_or_insert(&"banana", ||"orange"), &"yellow");
-        assert_opt_eq(cache.get_or_insert(&"lemon", ||"orange"), &"orange");
-        assert_opt_eq(cache.get_or_insert(&"lemon", ||"red"), &"orange");
+        assert_opt_eq(cache.get_or_insert(&"apple", || "orange"), &"red");
+        assert_opt_eq(cache.get_or_insert(&"banana", || "orange"), &"yellow");
+        assert_opt_eq(cache.get_or_insert(&"lemon", || "orange"), &"orange");
+        assert_opt_eq(cache.get_or_insert(&"lemon", || "red"), &"orange");
     }
 
     #[test]
