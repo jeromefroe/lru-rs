@@ -320,9 +320,9 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         }
     }
 
-    /// Pushes a key-value pair into the cache. If an entry with key `k` already exists in the cache or
-    /// another cache entry is removed (due to the lru's capacity), 
-    /// then it returns the old entry's value. Otherwise, returns `None`.
+    /// Pushes a key-value pair into the cache. If an entry with key `k` already exists in
+    /// the cache or another cache entry is removed (due to the lru's capacity),
+    /// then it returns the old entry's key-value pair. Otherwise, returns `None`.
     ///
     /// # Example
     ///
@@ -332,18 +332,18 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     ///
     /// assert_eq!(None, cache.push(1, "a"));
     /// assert_eq!(None, cache.push(2, "b"));
-    /// 
-    /// // This push call returns "b" because that was the previous value for 2's entry.
-    /// assert_eq!(Some("b"), cache.push(2, "beta"));
-    /// 
-    /// // This push call returns "a" because the cache is at capacity and "a" was the lru value.
-    /// assert_eq!(Some("a"), cache.push(3, "alpha"));
+    ///
+    /// // This push call returns (2, "b") because that was the previously 2's entry in the cache.
+    /// assert_eq!(Some((2, "b")), cache.push(2, "beta"));
+    ///
+    /// // This push call returns (1, "a") because the cache is at capacity and 1's entry was the lru entry.
+    /// assert_eq!(Some((1, "a")), cache.push(3, "alpha"));
     ///
     /// assert_eq!(cache.get(&1), None);
     /// assert_eq!(cache.get(&2), Some(&"beta"));
     /// assert_eq!(cache.get(&3), Some(&"alpha"));
     /// ```
-    pub fn push(&mut self, k: K, mut v: V) -> Option<V> {
+    pub fn push(&mut self, k: K, mut v: V) -> Option<(K, V)> {
         let node_ptr = self.map.get_mut(&KeyRef { k: &k }).map(|node| {
             let node_ptr: *mut LruEntry<K, V> = &mut **node;
             node_ptr
@@ -356,7 +356,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
                 unsafe { mem::swap(&mut v, &mut (*(*node_ptr).val.as_mut_ptr()) as &mut V) }
                 self.detach(node_ptr);
                 self.attach(node_ptr);
-                Some(v)
+                Some((k, v))
             }
             None => {
                 // if the capacity is zero, do nothing
@@ -379,7 +379,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
 
     // Used internally to swap out a node if the cache is full or to create a new node if space
     // is available. Shared between `put`, `push`, and `get_or_insert`.
-    fn replace_or_create_node(&mut self, k: K, v: V) -> (Option<V>, Box<LruEntry<K, V>>) {
+    fn replace_or_create_node(&mut self, k: K, v: V) -> (Option<(K, V)>, Box<LruEntry<K, V>>) {
         if self.len() == self.cap() {
             // if the cache is full, remove the last entry so we can use it for the new key
             let old_key = KeyRef {
@@ -387,16 +387,10 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             };
             let mut old_node = self.map.remove(&old_key).unwrap();
 
-            // drop the node's current key and and overwrite it
-            unsafe {
-                ptr::drop_in_place(old_node.key.as_mut_ptr());
-            }
+            // read out the node's old key and value and then replace it
+            let replaced = unsafe { (old_node.key.assume_init(), old_node.val.assume_init()) };
 
             old_node.key = mem::MaybeUninit::new(k);
-
-            // replace the node's current val and overwrite it
-            let replaced = unsafe { old_node.val.assume_init() };
-
             old_node.val = mem::MaybeUninit::new(v);
 
             let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
