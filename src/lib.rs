@@ -333,7 +333,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// assert_eq!(None, cache.push(1, "a"));
     /// assert_eq!(None, cache.push(2, "b"));
     ///
-    /// // This push call returns (2, "b") because that was the previously 2's entry in the cache.
+    /// // This push call returns (2, "b") because that was previously 2's entry in the cache.
     /// assert_eq!(Some((2, "b")), cache.push(2, "beta"));
     ///
     /// // This push call returns (1, "a") because the cache is at capacity and 1's entry was the lru entry.
