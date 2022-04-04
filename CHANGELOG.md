@@ -2,7 +2,7 @@
 
 ## [v0.7.4](https://github.com/jeromefroe/lru-rs/tree/0.7.4) - 2022-04-03
 
-- Implement `IntoIterator` trait.
+- Implement `IntoIterator` trait and fix lifetime bug in `get_or_insert`.
 
 ## [v0.7.3](https://github.com/jeromefroe/lru-rs/tree/0.7.3) - 2022-02-28
 
