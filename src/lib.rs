@@ -287,37 +287,8 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// assert_eq!(cache.get(&1), Some(&"a"));
     /// assert_eq!(cache.get(&2), Some(&"beta"));
     /// ```
-    pub fn put(&mut self, k: K, mut v: V) -> Option<V> {
-        let node_ptr = self.map.get_mut(&KeyRef { k: &k }).map(|node| {
-            let node_ptr: *mut LruEntry<K, V> = &mut **node;
-            node_ptr
-        });
-
-        match node_ptr {
-            Some(node_ptr) => {
-                // if the key is already in the cache just update its value and move it to the
-                // front of the list
-                unsafe { mem::swap(&mut v, &mut (*(*node_ptr).val.as_mut_ptr()) as &mut V) }
-                self.detach(node_ptr);
-                self.attach(node_ptr);
-                Some(v)
-            }
-            None => {
-                // if the capacity is zero, do nothing
-                if self.cap() == 0 {
-                    return None;
-                }
-
-                let (_, mut node) = self.replace_or_create_node(k, v);
-
-                let node_ptr: *mut LruEntry<K, V> = &mut *node;
-                self.attach(node_ptr);
-
-                let keyref = unsafe { (*node_ptr).key.as_ptr() };
-                self.map.insert(KeyRef { k: keyref }, node);
-                None
-            }
-        }
+    pub fn put(&mut self, k: K, v: V) -> Option<V> {
+        self.capturing_put(k, v, false).map(|(_, v)| v)
     }
 
     /// Pushes a key-value pair into the cache. If an entry with key `k` already exists in
@@ -343,14 +314,20 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// assert_eq!(cache.get(&2), Some(&"beta"));
     /// assert_eq!(cache.get(&3), Some(&"alpha"));
     /// ```
-    pub fn push(&mut self, k: K, mut v: V) -> Option<(K, V)> {
-        let node_ptr = self.map.get_mut(&KeyRef { k: &k }).map(|node| {
-            let node_ptr: *mut LruEntry<K, V> = &mut **node;
-            node_ptr
-        });
+    pub fn push(&mut self, k: K, v: V) -> Option<(K, V)> {
+        self.capturing_put(k, v, true)
+    }
 
-        match node_ptr {
-            Some(node_ptr) => {
+    // Used internally by `put` and `push` to add a new entry to the lru. 
+    // Takes ownership of and returns entries replaced due to the cache's capacity
+    // when `capture` is true. 
+    fn capturing_put(&mut self, k: K, mut v: V, capture: bool) -> Option<(K, V)> {
+        let node_ref = self.map.get_mut(&KeyRef { k: &k });
+
+        match node_ref {
+            Some(node_ref) => {
+                let node_ptr: *mut LruEntry<K, V> = &mut **node_ref;
+
                 // if the key is already in the cache just update its value and move it to the
                 // front of the list
                 unsafe { mem::swap(&mut v, &mut (*(*node_ptr).val.as_mut_ptr()) as &mut V) }
@@ -372,10 +349,12 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
                 let keyref = unsafe { (*node_ptr).key.as_ptr() };
                 self.map.insert(KeyRef { k: keyref }, node);
 
-                replaced
+                replaced.filter(|_| capture)
             }
         }
     }
+
+    
 
     // Used internally to swap out a node if the cache is full or to create a new node if space
     // is available. Shared between `put`, `push`, and `get_or_insert`.
