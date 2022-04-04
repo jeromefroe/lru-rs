@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.7.5](https://github.com/jeromefroe/lru-rs/tree/0.7.5) - 2022-04-04
+
+- Add `push` method.
+
 ## [v0.7.4](https://github.com/jeromefroe/lru-rs/tree/0.7.4) - 2022-04-03
 
 - Implement `IntoIterator` trait and fix lifetime bug in `get_or_insert`.
