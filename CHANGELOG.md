@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.7.4](https://github.com/jeromefroe/lru-rs/tree/0.7.4) - 2022-04-03
+
+- Implement `IntoIterator` trait.
+
 ## [v0.7.3](https://github.com/jeromefroe/lru-rs/tree/0.7.3) - 2022-02-28
 
 - Add `get_or_insert` method.
