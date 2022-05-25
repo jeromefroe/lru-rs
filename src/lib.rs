@@ -318,9 +318,9 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         self.capturing_put(k, v, true)
     }
 
-    // Used internally by `put` and `push` to add a new entry to the lru. 
+    // Used internally by `put` and `push` to add a new entry to the lru.
     // Takes ownership of and returns entries replaced due to the cache's capacity
-    // when `capture` is true. 
+    // when `capture` is true.
     fn capturing_put(&mut self, k: K, mut v: V, capture: bool) -> Option<(K, V)> {
         let node_ref = self.map.get_mut(&KeyRef { k: &k });
 
@@ -353,8 +353,6 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             }
         }
     }
-
-    
 
     // Used internally to swap out a node if the cache is full or to create a new node if space
     // is available. Shared between `put`, `push`, and `get_or_insert`.
@@ -643,6 +641,39 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
                 let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
                 self.detach(node_ptr);
                 unsafe { Some(old_node.val.assume_init()) }
+            }
+        }
+    }
+
+    /// Removes and returns the key and the value corresponding to the key from the cache or
+    /// `None` if it does not exist.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// cache.put(1, "a");
+    /// cache.put(2, "a");
+    ///
+    /// assert_eq!(cache.pop(&1), Some("a"));
+    /// assert_eq!(cache.pop_entry(&2), Some((2, "a")));
+    /// assert_eq!(cache.pop(&1), None);
+    /// assert_eq!(cache.pop_entry(&2), None);
+    /// assert_eq!(cache.len(), 0);
+    /// ```
+    pub fn pop_entry<Q>(&mut self, k: &Q) -> Option<(K, V)>
+    where
+        KeyRef<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        match self.map.remove(k) {
+            None => None,
+            Some(mut old_node) => {
+                let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
+                self.detach(node_ptr);
+                unsafe { Some((old_node.key.assume_init(), old_node.val.assume_init())) }
             }
         }
     }
@@ -1102,14 +1133,14 @@ where
 }
 
 impl<K, V> ExactSizeIterator for IntoIter<K, V> where K: Hash + Eq {}
-impl<K, V> FusedIterator for IntoIter<K, V> where K: Hash + Eq  {}
+impl<K, V> FusedIterator for IntoIter<K, V> where K: Hash + Eq {}
 
 impl<K: Hash + Eq, V> IntoIterator for LruCache<K, V> {
     type Item = (K, V);
     type IntoIter = IntoIter<K, V>;
 
     fn into_iter(self) -> IntoIter<K, V> {
-        IntoIter{cache: self}
+        IntoIter { cache: self }
     }
 }
 
@@ -1355,6 +1386,24 @@ mod tests {
         let popped = cache.pop(&"apple");
         assert!(popped.is_some());
         assert_eq!(popped.unwrap(), "red");
+        assert_eq!(cache.len(), 1);
+        assert!(cache.get(&"apple").is_none());
+        assert_opt_eq(cache.get(&"banana"), "yellow");
+    }
+
+    #[test]
+    fn test_pop_entry() {
+        let mut cache = LruCache::new(2);
+        cache.put("apple", "red");
+        cache.put("banana", "yellow");
+
+        assert_eq!(cache.len(), 2);
+        assert_opt_eq(cache.get(&"apple"), "red");
+        assert_opt_eq(cache.get(&"banana"), "yellow");
+
+        let popped = cache.pop_entry(&"apple");
+        assert!(popped.is_some());
+        assert_eq!(popped.unwrap(), ("apple", "red"));
         assert_eq!(cache.len(), 1);
         assert!(cache.get(&"apple").is_none());
         assert_opt_eq(cache.get(&"banana"), "yellow");
