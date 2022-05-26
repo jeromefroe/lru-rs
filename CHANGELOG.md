@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.7.6](https://github.com/jeromefroe/lru-rs/tree/0.7.6) - 2022-05-25
+
+- Add `pop_entry` method.
+
 ## [v0.7.5](https://github.com/jeromefroe/lru-rs/tree/0.7.5) - 2022-04-04
 
 - Add `push` method.
