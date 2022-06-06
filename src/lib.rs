@@ -189,6 +189,14 @@ pub struct LruCache<
 
 #[cfg(feature = "allocator_api")]
 impl<K: Hash + Eq, V, S: BuildHasher, A: Clone + Allocator> LruCache<K, V, S, A> {
+    pub fn with_hasher_in(cap: usize, hash_builder: S, alloc: A) -> Self {
+        LruCache::construct_in(
+            cap,
+            HashMap::with_capacity_and_hasher_in(cap, hash_builder, alloc.clone()),
+            alloc,
+        )
+    }
+
     pub fn unbounded_with_hasher_in(hash_builder: S, alloc: A) -> Self {
         LruCache::construct_in(
             usize::MAX,
