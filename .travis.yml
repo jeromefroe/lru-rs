@@ -58,7 +58,3 @@ matrix:
       rust: stable
       script:
         - cargo test --no-default-features
-    - env: NAME="nightly-feature"
-      rust: nightly
-      script:
-        - cargo test --features nightly

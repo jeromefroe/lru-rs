@@ -57,7 +57,6 @@
 //! ```
 
 #![no_std]
-#![cfg_attr(feature = "nightly", feature(negative_impls, auto_traits))]
 
 #[cfg(feature = "hashbrown")]
 extern crate hashbrown;
@@ -87,6 +86,7 @@ extern crate alloc;
 
 // Struct used to hold a reference to a key
 #[doc(hidden)]
+#[derive(Eq)]
 pub struct KeyRef<K> {
     k: *const K,
 }
@@ -103,48 +103,24 @@ impl<K: PartialEq> PartialEq for KeyRef<K> {
     }
 }
 
-impl<K: Eq> Eq for KeyRef<K> {}
-
-#[cfg(feature = "nightly")]
-#[doc(hidden)]
-pub auto trait NotKeyRef {}
-
-#[cfg(feature = "nightly")]
-impl<K> !NotKeyRef for KeyRef<K> {}
-
-#[cfg(feature = "nightly")]
-impl<K, D> Borrow<D> for KeyRef<K>
-where
-    K: Borrow<D>,
-    D: NotKeyRef + ?Sized,
-{
-    fn borrow(&self) -> &D {
-        unsafe { &*self.k }.borrow()
-    }
-}
-
-#[cfg(not(feature = "nightly"))]
 impl<K> Borrow<K> for KeyRef<K> {
     fn borrow(&self) -> &K {
         unsafe { &*self.k }
     }
 }
 
-#[cfg(not(feature = "nightly"))]
 impl Borrow<str> for KeyRef<alloc::string::String> {
     fn borrow(&self) -> &str {
         unsafe { &*self.k }
     }
 }
 
-#[cfg(not(feature = "nightly"))]
 impl<T: ?Sized> Borrow<T> for KeyRef<Box<T>> {
     fn borrow(&self) -> &T {
         unsafe { &*self.k }
     }
 }
 
-#[cfg(not(feature = "nightly"))]
 impl<T> Borrow<[T]> for KeyRef<alloc::vec::Vec<T>> {
     fn borrow(&self) -> &[T] {
         unsafe { &*self.k }
