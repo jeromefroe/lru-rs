@@ -57,6 +57,7 @@
 //! ```
 
 #![no_std]
+#![cfg_attr(feature = "allocator_api", feature(allocator_api))]
 
 #[cfg(feature = "hashbrown")]
 extern crate hashbrown;
@@ -64,8 +65,12 @@ extern crate hashbrown;
 #[cfg(test)]
 extern crate scoped_threadpool;
 
+#[cfg(feature = "allocator_api")]
+use alloc::alloc::Global;
 use alloc::borrow::Borrow;
 use alloc::boxed::Box;
+#[cfg(feature = "allocator_api")]
+use core::alloc::Allocator;
 use core::fmt;
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::iter::FusedIterator;
@@ -162,13 +167,70 @@ pub type DefaultHasher = hashbrown::hash_map::DefaultHashBuilder;
 pub type DefaultHasher = std::collections::hash_map::RandomState;
 
 /// An LRU Cache
-pub struct LruCache<K, V, S = DefaultHasher> {
+pub struct LruCache<
+    K,
+    V,
+    S = DefaultHasher,
+    #[cfg(feature = "allocator_api")] A: Clone + Allocator = Global,
+> {
+    #[cfg(feature = "allocator_api")]
+    map: HashMap<KeyRef<K>, Box<LruEntry<K, V>, A>, S, A>,
+    #[cfg(not(feature = "allocator_api"))]
     map: HashMap<KeyRef<K>, Box<LruEntry<K, V>>, S>,
     cap: usize,
 
     // head and tail are sigil nodes to faciliate inserting entries
     head: *mut LruEntry<K, V>,
     tail: *mut LruEntry<K, V>,
+
+    #[cfg(feature = "allocator_api")]
+    alloc: A,
+}
+
+#[cfg(feature = "allocator_api")]
+impl<K: Hash + Eq, V, S: BuildHasher, A: Clone + Allocator> LruCache<K, V, S, A> {
+    pub fn unbounded_with_hasher_in(hash_builder: S, alloc: A) -> Self {
+        LruCache::construct_in(
+            usize::MAX,
+            HashMap::with_hasher_in(hash_builder, alloc.clone()),
+            alloc,
+        )
+    }
+
+    /// Creates a new LRU Cache with the given capacity and allocator.
+    fn construct_in(
+        cap: usize,
+        map: HashMap<KeyRef<K>, Box<LruEntry<K, V>, A>, S, A>,
+        alloc: A,
+    ) -> LruCache<K, V, S, A> {
+        // NB: The compiler warns that cache does not need to be marked as mutable if we
+        // declare it as such since we only mutate it inside the unsafe block.
+        let cache = LruCache {
+            map,
+            cap,
+            head: Box::into_raw(Box::new_in(LruEntry::new_sigil(), alloc.clone())),
+            tail: Box::into_raw(Box::new_in(LruEntry::new_sigil(), alloc.clone())),
+            alloc,
+        };
+
+        unsafe {
+            (*cache.head).next = cache.tail;
+            (*cache.tail).prev = cache.head;
+        }
+
+        cache
+    }
+}
+
+#[cfg(feature = "allocator_api")]
+impl<K: Hash + Eq, V, A: Clone + Allocator> LruCache<K, V, DefaultHasher, A> {
+    pub fn new_in(cap: usize, alloc: A) -> LruCache<K, V, DefaultHasher, A> {
+        LruCache::construct_in(cap, HashMap::with_capacity_in(cap, alloc.clone()), alloc)
+    }
+
+    pub fn unbounded_in(alloc: A) -> LruCache<K, V, DefaultHasher, A> {
+        LruCache::construct_in(usize::MAX, HashMap::new_in(alloc.clone()), alloc)
+    }
 }
 
 impl<K: Hash + Eq, V> LruCache<K, V> {
@@ -237,6 +299,8 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             cap,
             head: Box::into_raw(Box::new(LruEntry::new_sigil())),
             tail: Box::into_raw(Box::new(LruEntry::new_sigil())),
+            #[cfg(feature = "allocator_api")]
+            alloc: Global,
         };
 
         unsafe {
@@ -352,7 +416,14 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             (Some(replaced), old_node)
         } else {
             // if the cache is not full allocate a new LruEntry
-            (None, Box::new(LruEntry::new(k, v)))
+            #[cfg(feature = "allocator_api")]
+            {
+                (None, Box::new_in(LruEntry::new(k, v), self.alloc))
+            }
+            #[cfg(not(feature = "allocator_api"))]
+            {
+                (None, Box::new(LruEntry::new(k, v)))
+            }
         }
     }
 
@@ -883,6 +954,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     }
 }
 
+#[cfg(not(feature = "allocator_api"))]
 impl<K, V, S> Drop for LruCache<K, V, S> {
     fn drop(&mut self) {
         self.map.values_mut().for_each(|e| unsafe {
@@ -894,6 +966,22 @@ impl<K, V, S> Drop for LruCache<K, V, S> {
         unsafe {
             let _head = *Box::from_raw(self.head);
             let _tail = *Box::from_raw(self.tail);
+        }
+    }
+}
+
+#[cfg(feature = "allocator_api")]
+impl<K, V, S, A: Clone + Allocator> Drop for LruCache<K, V, S, A> {
+    fn drop(&mut self) {
+        self.map.values_mut().for_each(|e| unsafe {
+            ptr::drop_in_place(e.key.as_mut_ptr());
+            ptr::drop_in_place(e.val.as_mut_ptr());
+        });
+        // We rebox the head/tail, and because these are maybe-uninit
+        // they do not have the absent k/v dropped.
+        unsafe {
+            let _head = *Box::from_raw_in(self.head, self.alloc.clone());
+            let _tail = *Box::from_raw_in(self.tail, self.alloc.clone());
         }
     }
 }

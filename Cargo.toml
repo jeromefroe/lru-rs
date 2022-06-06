@@ -12,6 +12,7 @@ keywords = ["LRU", "cache"]
 
 [features]
 default = ["hashbrown"]
+allocator_api = ["hashbrown/nightly"]
 
 [dependencies]
 hashbrown = { version = "0.11.2", optional = true }
