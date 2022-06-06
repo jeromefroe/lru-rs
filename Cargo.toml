@@ -11,11 +11,10 @@ license = "MIT"
 keywords = ["LRU", "cache"]
 
 [features]
-default = ["hashbrown"]
-allocator_api = ["hashbrown/nightly"]
+default = ["hashbrown/nightly"]
 
 [dependencies]
-hashbrown = { version = "0.11.2", optional = true }
+hashbrown = "0.11.2"
 
 [dev-dependencies]
 scoped_threadpool = "0.1.*"

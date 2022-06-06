@@ -56,36 +56,25 @@
 //! }
 //! ```
 
-#![no_std]
-#![cfg_attr(feature = "allocator_api", feature(allocator_api))]
+#![feature(allocator_api)]
 
-#[cfg(feature = "hashbrown")]
 extern crate hashbrown;
 
 #[cfg(test)]
 extern crate scoped_threadpool;
 
-#[cfg(feature = "allocator_api")]
 use alloc::alloc::Global;
 use alloc::borrow::Borrow;
 use alloc::boxed::Box;
-#[cfg(feature = "allocator_api")]
-use core::alloc::Allocator;
-use core::fmt;
-use core::hash::{BuildHasher, Hash, Hasher};
-use core::iter::FusedIterator;
-use core::marker::PhantomData;
-use core::mem;
-use core::ptr;
-use core::usize;
+use std::alloc::Allocator;
+use std::fmt;
+use std::hash::{BuildHasher, Hash, Hasher};
+use std::iter::FusedIterator;
+use std::marker::PhantomData;
+use std::mem;
+use std::ptr;
 
-#[cfg(any(test, not(feature = "hashbrown")))]
-extern crate std;
-
-#[cfg(feature = "hashbrown")]
 use hashbrown::HashMap;
-#[cfg(not(feature = "hashbrown"))]
-use std::collections::HashMap;
 
 extern crate alloc;
 
@@ -164,33 +153,20 @@ impl<K, V> LruEntry<K, V> {
     }
 }
 
-#[cfg(feature = "hashbrown")]
 pub type DefaultHasher = hashbrown::hash_map::DefaultHashBuilder;
-#[cfg(not(feature = "hashbrown"))]
-pub type DefaultHasher = std::collections::hash_map::RandomState;
 
 /// An LRU Cache
-pub struct LruCache<
-    K,
-    V,
-    S = DefaultHasher,
-    #[cfg(feature = "allocator_api")] A: Clone + Allocator = Global,
-> {
-    #[cfg(feature = "allocator_api")]
+pub struct LruCache<K, V, S = DefaultHasher, A: Clone + Allocator = Global> {
     map: HashMap<KeyRef<K>, Box<LruEntry<K, V>, A>, S, A>,
-    #[cfg(not(feature = "allocator_api"))]
-    map: HashMap<KeyRef<K>, Box<LruEntry<K, V>>, S>,
     cap: usize,
 
     // head and tail are sigil nodes to faciliate inserting entries
     head: *mut LruEntry<K, V>,
     tail: *mut LruEntry<K, V>,
 
-    #[cfg(feature = "allocator_api")]
     alloc: A,
 }
 
-#[cfg(feature = "allocator_api")]
 impl<K: Hash + Eq, V, S: BuildHasher, A: Clone + Allocator> LruCache<K, V, S, A> {
     pub fn with_hasher_in(cap: usize, hash_builder: S, alloc: A) -> Self {
         LruCache::construct_in(
@@ -233,7 +209,6 @@ impl<K: Hash + Eq, V, S: BuildHasher, A: Clone + Allocator> LruCache<K, V, S, A>
     }
 }
 
-#[cfg(feature = "allocator_api")]
 impl<K: Hash + Eq, V, A: Clone + Allocator> LruCache<K, V, DefaultHasher, A> {
     pub fn new_in(cap: usize, alloc: A) -> LruCache<K, V, DefaultHasher, A> {
         LruCache::construct_in(cap, HashMap::with_capacity_in(cap, alloc.clone()), alloc)
@@ -254,7 +229,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     /// let mut cache: LruCache<isize, &str> = LruCache::new(10);
     /// ```
     pub fn new(cap: usize) -> LruCache<K, V> {
-        LruCache::construct(cap, HashMap::with_capacity(cap))
+        LruCache::construct_in(cap, HashMap::with_capacity(cap), Global)
     }
 
     /// Creates a new LRU Cache that never automatically evicts items.
@@ -266,7 +241,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     /// let mut cache: LruCache<isize, &str> = LruCache::unbounded();
     /// ```
     pub fn unbounded() -> LruCache<K, V> {
-        LruCache::construct(usize::MAX, HashMap::default())
+        LruCache::construct_in(usize::MAX, HashMap::default(), Global)
     }
 }
 
@@ -283,7 +258,11 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// let mut cache: LruCache<isize, &str> = LruCache::with_hasher(10, s);
     /// ```
     pub fn with_hasher(cap: usize, hash_builder: S) -> LruCache<K, V, S> {
-        LruCache::construct(cap, HashMap::with_capacity_and_hasher(cap, hash_builder))
+        LruCache::construct_in(
+            cap,
+            HashMap::with_capacity_and_hasher(cap, hash_builder),
+            Global,
+        )
     }
 
     /// Creates a new LRU Cache that never automatically evicts items and
@@ -298,30 +277,11 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// let mut cache: LruCache<isize, &str> = LruCache::unbounded_with_hasher(s);
     /// ```
     pub fn unbounded_with_hasher(hash_builder: S) -> LruCache<K, V, S> {
-        LruCache::construct(usize::MAX, HashMap::with_hasher(hash_builder))
+        LruCache::construct_in(usize::MAX, HashMap::with_hasher(hash_builder), Global)
     }
+}
 
-    /// Creates a new LRU Cache with the given capacity.
-    fn construct(cap: usize, map: HashMap<KeyRef<K>, Box<LruEntry<K, V>>, S>) -> LruCache<K, V, S> {
-        // NB: The compiler warns that cache does not need to be marked as mutable if we
-        // declare it as such since we only mutate it inside the unsafe block.
-        let cache = LruCache {
-            map,
-            cap,
-            head: Box::into_raw(Box::new(LruEntry::new_sigil())),
-            tail: Box::into_raw(Box::new(LruEntry::new_sigil())),
-            #[cfg(feature = "allocator_api")]
-            alloc: Global,
-        };
-
-        unsafe {
-            (*cache.head).next = cache.tail;
-            (*cache.tail).prev = cache.head;
-        }
-
-        cache
-    }
-
+impl<K: Hash + Eq, V, S: BuildHasher, A: Clone + Allocator> LruCache<K, V, S, A> {
     /// Puts a key-value pair into cache. If the key already exists in the cache, then it updates
     /// the key's value and returns the old value. Otherwise, `None` is returned.
     ///
@@ -407,7 +367,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
 
     // Used internally to swap out a node if the cache is full or to create a new node if space
     // is available. Shared between `put`, `push`, and `get_or_insert`.
-    fn replace_or_create_node(&mut self, k: K, v: V) -> (Option<(K, V)>, Box<LruEntry<K, V>>) {
+    fn replace_or_create_node(&mut self, k: K, v: V) -> (Option<(K, V)>, Box<LruEntry<K, V>, A>) {
         if self.len() == self.cap() {
             // if the cache is full, remove the last entry so we can use it for the new key
             let old_key = KeyRef {
@@ -427,14 +387,10 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             (Some(replaced), old_node)
         } else {
             // if the cache is not full allocate a new LruEntry
-            #[cfg(feature = "allocator_api")]
-            {
-                (None, Box::new_in(LruEntry::new(k, v), self.alloc))
-            }
-            #[cfg(not(feature = "allocator_api"))]
-            {
-                (None, Box::new(LruEntry::new(k, v)))
-            }
+            (
+                None,
+                Box::<_, A>::new_in(LruEntry::new(k, v), self.alloc.clone()),
+            )
         }
     }
 
@@ -932,7 +888,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         }
     }
 
-    fn remove_last(&mut self) -> Option<Box<LruEntry<K, V>>> {
+    fn remove_last(&mut self) -> Option<Box<LruEntry<K, V>, A>> {
         let prev;
         unsafe { prev = (*self.tail).prev }
         if prev != self.head {
@@ -965,23 +921,6 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     }
 }
 
-#[cfg(not(feature = "allocator_api"))]
-impl<K, V, S> Drop for LruCache<K, V, S> {
-    fn drop(&mut self) {
-        self.map.values_mut().for_each(|e| unsafe {
-            ptr::drop_in_place(e.key.as_mut_ptr());
-            ptr::drop_in_place(e.val.as_mut_ptr());
-        });
-        // We rebox the head/tail, and because these are maybe-uninit
-        // they do not have the absent k/v dropped.
-        unsafe {
-            let _head = *Box::from_raw(self.head);
-            let _tail = *Box::from_raw(self.tail);
-        }
-    }
-}
-
-#[cfg(feature = "allocator_api")]
 impl<K, V, S, A: Clone + Allocator> Drop for LruCache<K, V, S, A> {
     fn drop(&mut self) {
         self.map.values_mut().for_each(|e| unsafe {
@@ -1222,8 +1161,8 @@ impl<K: Hash + Eq, V> IntoIterator for LruCache<K, V> {
 #[cfg(test)]
 mod tests {
     use super::LruCache;
-    use core::fmt::Debug;
     use scoped_threadpool::Pool;
+    use std::fmt::Debug;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn assert_opt_eq<V: PartialEq + Debug>(opt: Option<&V>, v: V) {
@@ -1266,7 +1205,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "hashbrown")]
     fn test_with_hasher() {
         use hashbrown::hash_map::DefaultHashBuilder;
 
