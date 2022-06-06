@@ -96,6 +96,9 @@ pub struct KeyRef<K> {
     k: *const K,
 }
 
+unsafe impl<K: Send> Send for KeyRef<K> {}
+unsafe impl<K: Sync> Sync for KeyRef<K> {}
+
 impl<K: Hash> Hash for KeyRef<K> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         unsafe { (*self.k).hash(state) }
