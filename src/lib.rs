@@ -478,7 +478,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     where
         F: Fn() -> V,
     {
-        if let Some(node) = self.map.get_mut(&k) {
+        if let Some(node) = self.map.get_mut(&KeyRef { k: &k }) {
             let node_ptr: *mut LruEntry<K, V> = &mut **node;
 
             self.detach(node_ptr);
