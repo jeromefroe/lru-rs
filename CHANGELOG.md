@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.7.7](https://github.com/jeromefroe/lru-rs/tree/0.7.7) - 2022-06-14
+
+- Use `FnOnce` instead of `Fn` for trait bound of `fn` in `get_or_insert`.
+
 ## [v0.7.6](https://github.com/jeromefroe/lru-rs/tree/0.7.6) - 2022-05-25
 
 - Add `pop_entry` method.
