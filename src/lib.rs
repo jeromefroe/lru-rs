@@ -452,8 +452,8 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
 
     /// Returns a reference to the value of the key in the cache if it is
     /// present in the cache and moves the key to the head of the LRU list.
-    /// If the key does not exist the provided `Fn` is used to populate the list and a reference
-    /// is returned.
+    /// If the key does not exist the provided `FnOnce` is used to populate
+    /// the list and a reference is returned.
     ///
     /// This method will only return `None` when the capacity of the cache is 0 and no entries
     /// can be populated.
@@ -476,7 +476,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// ```
     pub fn get_or_insert<'a, F>(&'a mut self, k: K, f: F) -> Option<&'a V>
     where
-        F: Fn() -> V,
+        F: FnOnce() -> V,
     {
         if let Some(node) = self.map.get_mut(&KeyRef { k: &k }) {
             let node_ptr: *mut LruEntry<K, V> = &mut **node;
