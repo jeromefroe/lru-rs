@@ -915,10 +915,10 @@ impl<K, V, S> Drop for LruCache<K, V, S> {
         });
         // We rebox the head/tail, and because these are maybe-uninit
         // they do not have the absent k/v dropped.
-        unsafe {
-            let _head = *Box::from_raw(self.head);
-            let _tail = *Box::from_raw(self.tail);
-        }
+        
+            let _head = unsafe { *Box::from_raw(self.head) };
+            let _tail = unsafe { *Box::from_raw(self.tail) };
+        
     }
 }
 
