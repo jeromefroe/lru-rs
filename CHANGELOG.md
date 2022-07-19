@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.7.8](https://github.com/jeromefroe/lru-rs/tree/0.7.8) - 2022-07-19
+
+- Update dependency on hashbrown to 0.12.
+
 ## [v0.7.7](https://github.com/jeromefroe/lru-rs/tree/0.7.7) - 2022-06-14
 
 - Use `FnOnce` instead of `Fn` for trait bound of `fn` in `get_or_insert`.
