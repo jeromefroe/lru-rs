@@ -1,8 +1,5 @@
 on:
-  pull_request:
-    types:
-      - opened
-      - reopened
+  pull_request_target:
   push:
     branches:
       - master
