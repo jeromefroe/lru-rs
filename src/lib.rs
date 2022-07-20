@@ -356,6 +356,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
 
     // Used internally to swap out a node if the cache is full or to create a new node if space
     // is available. Shared between `put`, `push`, and `get_or_insert`.
+    #[allow(clippy::type_complexity)]
     fn replace_or_create_node(&mut self, k: K, v: V) -> (Option<(K, V)>, Box<LruEntry<K, V>>) {
         if self.len() == self.cap() {
             // if the cache is full, remove the last entry so we can use it for the new key
@@ -474,7 +475,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// assert_eq!(cache.get_or_insert(1, ||"a"), Some(&"a"));
     /// assert_eq!(cache.get_or_insert(1, ||"b"), Some(&"a"));
     /// ```
-    pub fn get_or_insert<'a, F>(&'a mut self, k: K, f: F) -> Option<&'a V>
+    pub fn get_or_insert<'a, F>(&mut self, k: K, f: F) -> Option<&'a V>
     where
         F: FnOnce() -> V,
     {
@@ -526,7 +527,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     {
         self.map
             .get(k)
-            .map(|node| unsafe { &(*(*node).val.as_ptr()) as &V })
+            .map(|node| unsafe { &(*node.val.as_ptr()) as &V })
     }
 
     /// Returns a mutable reference to the value corresponding to the key in the cache or `None`
@@ -552,7 +553,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     {
         match self.map.get_mut(k) {
             None => None,
-            Some(node) => Some(unsafe { &mut (*(*node).val.as_mut_ptr()) as &mut V }),
+            Some(node) => Some(unsafe { &mut (*node.val.as_mut_ptr()) as &mut V }),
         }
     }
 
@@ -915,10 +916,9 @@ impl<K, V, S> Drop for LruCache<K, V, S> {
         });
         // We rebox the head/tail, and because these are maybe-uninit
         // they do not have the absent k/v dropped.
-        
-            let _head = unsafe { *Box::from_raw(self.head) };
-            let _tail = unsafe { *Box::from_raw(self.tail) };
-        
+
+        let _head = unsafe { *Box::from_raw(self.head) };
+        let _tail = unsafe { *Box::from_raw(self.tail) };
     }
 }
 
