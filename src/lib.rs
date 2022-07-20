@@ -527,7 +527,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     {
         self.map
             .get(k)
-            .map(|node| unsafe { &(*(*node).val.as_ptr()) as &V })
+            .map(|node| unsafe { &(*node.val.as_ptr()) as &V })
     }
 
     /// Returns a mutable reference to the value corresponding to the key in the cache or `None`
@@ -553,7 +553,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     {
         match self.map.get_mut(k) {
             None => None,
-            Some(node) => Some(unsafe { &mut (*(*node).val.as_mut_ptr()) as &mut V }),
+            Some(node) => Some(unsafe { &mut (*node.val.as_mut_ptr()) as &mut V }),
         }
     }
 
