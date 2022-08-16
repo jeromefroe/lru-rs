@@ -22,9 +22,10 @@ Below is a simple example of how to instantiate and use a LRU cache.
 extern crate lru;
 
 use lru::LruCache;
+use std::num::NonZeroUsize;
 
 fn main() {
-    let mut cache = LruCache::new(2);
+    let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
     cache.put("apple", 3);
     cache.put("banana", 2);
 
