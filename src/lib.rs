@@ -765,6 +765,76 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         unsafe { Some((key.assume_init(), val.assume_init())) }
     }
 
+    /// Marks the key as the most recently used one.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// use std::num::NonZeroUsize;
+    /// let mut cache = LruCache::new(NonZeroUsize::new(3).unwrap());
+    ///
+    /// cache.put(1, "a");
+    /// cache.put(2, "b");
+    /// cache.put(3, "c");
+    /// cache.get(&1);
+    /// cache.get(&2);
+    ///
+    /// // If we do `pop_lru` now, we would pop 3.
+    /// // assert_eq!(cache.pop_lru(), Some((3, "c")));
+    ///
+    /// // By promoting 3, we make sure it isn't popped.
+    /// cache.promote(&3);
+    /// assert_eq!(cache.pop_lru(), Some((1, "a")));
+    /// ```
+    pub fn promote<'a, Q>(&'a mut self, k: &Q)
+    where
+        KeyRef<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        if let Some(node) = self.map.get_mut(k) {
+            let node_ptr: *mut LruEntry<K, V> = &mut **node;
+            self.detach(node_ptr);
+            self.attach(node_ptr);
+        }
+    }
+
+    /// Marks the key as the least recently used one.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// use std::num::NonZeroUsize;
+    /// let mut cache = LruCache::new(NonZeroUsize::new(3).unwrap());
+    ///
+    /// cache.put(1, "a");
+    /// cache.put(2, "b");
+    /// cache.put(3, "c");
+    /// cache.get(&1);
+    /// cache.get(&2);
+    ///
+    /// // If we do `pop_lru` now, we would pop 3.
+    /// // assert_eq!(cache.pop_lru(), Some((3, "c")));
+    ///
+    /// // By demoting 1 and 2, we make sure those are popped first.
+    /// cache.demote(&2);
+    /// cache.demote(&1);
+    /// assert_eq!(cache.pop_lru(), Some((1, "a")));
+    /// assert_eq!(cache.pop_lru(), Some((2, "b")));
+    /// ```
+    pub fn demote<'a, Q>(&'a mut self, k: &Q)
+    where
+        KeyRef<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        if let Some(node) = self.map.get_mut(k) {
+            let node_ptr: *mut LruEntry<K, V> = &mut **node;
+            self.detach(node_ptr);
+            self.attach_last(node_ptr);
+        }
+    }
+
     /// Returns the number of key-value pairs that are currently in the the cache.
     ///
     /// # Example
@@ -964,12 +1034,23 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         }
     }
 
+    // Attaches `node` after the sigil `self.head` node.
     fn attach(&mut self, node: *mut LruEntry<K, V>) {
         unsafe {
             (*node).next = (*self.head).next;
             (*node).prev = self.head;
             (*self.head).next = node;
             (*(*node).next).prev = node;
+        }
+    }
+
+    // Attaches `node` before the sigil `self.tail` node.
+    fn attach_last(&mut self, node: *mut LruEntry<K, V>) {
+        unsafe {
+            (*node).next = self.tail;
+            (*node).prev = (*self.tail).prev;
+            (*self.tail).prev = node;
+            (*(*node).prev).next = node;
         }
     }
 }
@@ -1951,6 +2032,24 @@ mod tests {
         }
 
         assert_eq!(DROP_COUNT.load(Ordering::SeqCst), n * n * 2);
+    }
+
+    #[test]
+    fn test_promote_and_demote() {
+        let mut cache = LruCache::new(NonZeroUsize::new(5).unwrap());
+        for i in 0..5 {
+            cache.push(i, i);
+        }
+        cache.promote(&1);
+        cache.promote(&0);
+        cache.demote(&3);
+        cache.demote(&4);
+        assert_eq!(cache.pop_lru(), Some((4, 4)));
+        assert_eq!(cache.pop_lru(), Some((3, 3)));
+        assert_eq!(cache.pop_lru(), Some((2, 2)));
+        assert_eq!(cache.pop_lru(), Some((1, 1)));
+        assert_eq!(cache.pop_lru(), Some((0, 0)));
+        assert_eq!(cache.pop_lru(), None);
     }
 }
 
