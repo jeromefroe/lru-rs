@@ -44,4 +44,5 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: clippy
-          args: -- -D warnings
+          # clippy::needless_lifetimes suggest unsound code in this crate
+          args: -- -D warnings -A clippy::needless_lifetimes
