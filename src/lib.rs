@@ -486,7 +486,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// assert_eq!(cache.get_or_insert(1, ||"a"), &"a");
     /// assert_eq!(cache.get_or_insert(1, ||"b"), &"a");
     /// ```
-    pub fn get_or_insert<'a, F>(&mut self, k: K, f: F) -> &'a V
+    pub fn get_or_insert<'a, F>(&'a mut self, k: K, f: F) -> &'a V
     where
         F: FnOnce() -> V,
     {
@@ -581,7 +581,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     ///
     /// assert_eq!(cache.peek_lru(), Some((&1, &"a")));
     /// ```
-    pub fn peek_lru<'a>(&'_ self) -> Option<(&'a K, &'a V)> {
+    pub fn peek_lru<'a>(&'a self) -> Option<(&'a K, &'a V)> {
         if self.is_empty() {
             return None;
         }
@@ -1886,3 +1886,17 @@ mod tests {
         assert_eq!(DROP_COUNT.load(Ordering::SeqCst), n * n * 2);
     }
 }
+
+/// Doctests for what should *not* compile
+///
+/// ```compile_fail
+/// let mut cache = lru::LruCache::<u32, u32>::unbounded();
+/// let _: &'static u32 = cache.get_or_insert(0, || 92);
+/// ```
+///
+/// ```compile_fail
+/// let mut cache = lru::LruCache::<u32, u32>::unbounded();
+/// let _: Option<(&'static u32, _)> = cache.peek_lru();
+/// let _: Option<(_, &'static u32)> = cache.peek_lru();
+/// ```
+fn _test_lifetimes() {}
