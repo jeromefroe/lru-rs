@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## [v0.8.0](https://github.com/jeromefroe/lru-rs/tree/0.8.0) - 2022-09-11
+
+- Use `NonZeroUsize` for LRU capacity instead of usize.
+- Add `get_or_insert_mut` method which is similiar to `get_or_insert` but returns a mutable
+  reference instead of an immutable reference.
 - Add `LruCache::promote` and `LruCache::demote` API to manipulate LRU order of the entry directly.
 
 ## [v0.7.8](https://github.com/jeromefroe/lru-rs/tree/0.7.8) - 2022-07-19
