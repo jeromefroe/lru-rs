@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Add `LruCache::promote` and `LruCache::demote` API to manipulate LRU order of the entry directly.
+
 ## [v0.7.8](https://github.com/jeromefroe/lru-rs/tree/0.7.8) - 2022-07-19
 
 - Update dependency on hashbrown to 0.12.
