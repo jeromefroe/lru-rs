@@ -78,6 +78,8 @@ use hashbrown::HashMap;
 
 extern crate alloc;
 
+type Epoch = u64;
+
 // Struct used to hold a reference to a key
 #[doc(hidden)]
 #[derive(Eq)]
@@ -131,15 +133,17 @@ struct LruEntry<K, V> {
     val: mem::MaybeUninit<V>,
     prev: *mut LruEntry<K, V>,
     next: *mut LruEntry<K, V>,
+    epoch: Epoch,
 }
 
 impl<K, V> LruEntry<K, V> {
-    fn new(key: K, val: V) -> Self {
+    fn new(key: K, val: V, epoch: Epoch) -> Self {
         LruEntry {
             key: mem::MaybeUninit::new(key),
             val: mem::MaybeUninit::new(val),
             prev: ptr::null_mut(),
             next: ptr::null_mut(),
+            epoch,
         }
     }
 
@@ -149,6 +153,7 @@ impl<K, V> LruEntry<K, V> {
             val: mem::MaybeUninit::uninit(),
             prev: ptr::null_mut(),
             next: ptr::null_mut(),
+            epoch: 0,
         }
     }
 }
@@ -163,6 +168,9 @@ pub struct LruCache<K, V, S = DefaultHasher, A: Clone + Allocator = Global> {
     // head and tail are sigil nodes to faciliate inserting entries
     head: *mut LruEntry<K, V>,
     tail: *mut LruEntry<K, V>,
+
+    // used for epoch based eviction
+    cur_epoch: Epoch,
 
     alloc: A,
 }
@@ -197,6 +205,7 @@ impl<K: Hash + Eq, V, S: BuildHasher, A: Clone + Allocator> LruCache<K, V, S, A>
             cap,
             head: Box::into_raw(Box::new_in(LruEntry::new_sigil(), alloc.clone())),
             tail: Box::into_raw(Box::new_in(LruEntry::new_sigil(), alloc.clone())),
+            cur_epoch: 0,
             alloc,
         };
 
@@ -242,6 +251,11 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     /// ```
     pub fn unbounded() -> LruCache<K, V> {
         LruCache::construct_in(usize::MAX, HashMap::default(), Global)
+    }
+
+    /// Update the current epoch.
+    pub fn update_epoch(&mut self, epoch: Epoch) {
+        self.cur_epoch = epoch;
     }
 }
 
@@ -389,7 +403,7 @@ impl<K: Hash + Eq, V, S: BuildHasher, A: Clone + Allocator> LruCache<K, V, S, A>
             // if the cache is not full allocate a new LruEntry
             (
                 None,
-                Box::<_, A>::new_in(LruEntry::new(k, v), self.alloc.clone()),
+                Box::<_, A>::new_in(LruEntry::new(k, v, self.cur_epoch), self.alloc.clone()),
             )
         }
     }
@@ -805,6 +819,33 @@ impl<K: Hash + Eq, V, S: BuildHasher, A: Clone + Allocator> LruCache<K, V, S, A>
         self.cap = cap;
     }
 
+    pub fn evict_by_epoch(&mut self, epoch: Epoch) {
+        loop {
+            if self.is_empty() {
+                break;
+            }
+
+            let node = unsafe {
+                (*self.tail).prev
+            };
+            let node_epoch = unsafe {
+                (*node).epoch
+            };
+            if node_epoch < epoch {
+                let old_key = KeyRef {
+                    k: unsafe { &(*(*node).key.as_ptr()) },
+                };
+                let mut old_node = self.map.remove(&old_key).unwrap();
+                let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
+                self.detach(node_ptr);
+            } else {
+                break;
+            }
+        }
+
+        self.map.shrink_to_fit();
+    }
+
     /// Clears the contents of the cache.
     ///
     /// # Example
@@ -913,6 +954,7 @@ impl<K: Hash + Eq, V, S: BuildHasher, A: Clone + Allocator> LruCache<K, V, S, A>
 
     fn attach(&mut self, node: *mut LruEntry<K, V>) {
         unsafe {
+            (*node).epoch = self.cur_epoch;
             (*node).next = (*self.head).next;
             (*node).prev = self.head;
             (*self.head).next = node;
@@ -1499,6 +1541,27 @@ mod tests {
         cache.put(4, "d");
 
         cache.resize(2);
+
+        assert_eq!(cache.len(), 2);
+        assert!(cache.get(&1).is_none());
+        assert!(cache.get(&2).is_none());
+        assert_eq!(cache.get(&3), Some(&"c"));
+        assert_eq!(cache.get(&4), Some(&"d"));
+    }
+
+    #[test]
+    fn tesst_evict_by_epoch() {
+        let mut cache = LruCache::new(4);
+
+        cache.put(1, "a");
+        cache.put(2, "b");
+
+        cache.update_epoch(1);
+
+        cache.put(3, "c");
+        cache.put(4, "d");
+
+        cache.evict_by_epoch(1);
 
         assert_eq!(cache.len(), 2);
         assert!(cache.get(&1).is_none());
