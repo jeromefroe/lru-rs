@@ -825,12 +825,8 @@ impl<K: Hash + Eq, V, S: BuildHasher, A: Clone + Allocator> LruCache<K, V, S, A>
                 break;
             }
 
-            let node = unsafe {
-                (*self.tail).prev
-            };
-            let node_epoch = unsafe {
-                (*node).epoch
-            };
+            let node = unsafe { (*self.tail).prev };
+            let node_epoch = unsafe { (*node).epoch };
             if node_epoch < epoch {
                 let old_key = KeyRef {
                     k: unsafe { &(*(*node).key.as_ptr()) },
@@ -1568,6 +1564,11 @@ mod tests {
         assert!(cache.get(&2).is_none());
         assert_eq!(cache.get(&3), Some(&"c"));
         assert_eq!(cache.get(&4), Some(&"d"));
+
+        cache.evict_by_epoch(2);
+        assert_eq!(cache.len(), 0);
+        assert!(cache.get(&3).is_none());
+        assert!(cache.get(&4).is_none());
     }
 
     #[test]
