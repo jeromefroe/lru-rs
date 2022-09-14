@@ -253,8 +253,9 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
         LruCache::construct_in(usize::MAX, HashMap::default(), Global)
     }
 
-    /// Update the current epoch.
+    /// Update the current epoch. The given epoch should be greater than the current epoch.
     pub fn update_epoch(&mut self, epoch: Epoch) {
+        assert!(epoch > self.cur_epoch);
         self.cur_epoch = epoch;
     }
 }
