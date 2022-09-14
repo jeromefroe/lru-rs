@@ -169,7 +169,7 @@ pub struct LruCache<K, V, S = DefaultHasher, A: Clone + Allocator = Global> {
     head: *mut LruEntry<K, V>,
     tail: *mut LruEntry<K, V>,
 
-    // used for epoch based eviction
+    /// used for epoch based eviction
     cur_epoch: Epoch,
 
     alloc: A,
