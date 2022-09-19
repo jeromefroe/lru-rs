@@ -252,12 +252,6 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     pub fn unbounded() -> LruCache<K, V> {
         LruCache::construct_in(usize::MAX, HashMap::default(), Global)
     }
-
-    /// Update the current epoch. The given epoch should be greater than the current epoch.
-    pub fn update_epoch(&mut self, epoch: Epoch) {
-        assert!(epoch > self.cur_epoch);
-        self.cur_epoch = epoch;
-    }
 }
 
 impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
@@ -818,6 +812,12 @@ impl<K: Hash + Eq, V, S: BuildHasher, A: Clone + Allocator> LruCache<K, V, S, A>
         self.map.shrink_to_fit();
 
         self.cap = cap;
+    }
+
+    /// Update the current epoch. The given epoch should be greater than the current epoch.
+    pub fn update_epoch(&mut self, epoch: Epoch) {
+        assert!(epoch > self.cur_epoch);
+        self.cur_epoch = epoch;
     }
 
     pub fn evict_by_epoch(&mut self, epoch: Epoch) {
@@ -1547,7 +1547,7 @@ mod tests {
     }
 
     #[test]
-    fn tesst_evict_by_epoch() {
+    fn test_evict_by_epoch() {
         let mut cache = LruCache::new(4);
 
         cache.put(1, "a");
