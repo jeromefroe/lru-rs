@@ -833,7 +833,12 @@ impl<K: Hash + Eq, V, S: BuildHasher, A: Clone + Allocator> LruCache<K, V, S, A>
                     k: unsafe { &(*(*node).key.as_ptr()) },
                 };
                 let mut old_node = self.map.remove(&old_key).unwrap();
+                unsafe {
+                    ptr::drop_in_place(old_node.key.as_mut_ptr());
+                    ptr::drop_in_place(old_node.val.as_mut_ptr());
+                }
                 let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
+
                 self.detach(node_ptr);
             } else {
                 break;
@@ -1570,6 +1575,32 @@ mod tests {
         assert_eq!(cache.len(), 0);
         assert!(cache.get(&3).is_none());
         assert!(cache.get(&4).is_none());
+    }
+
+    #[test]
+    fn test_no_memory_leaks_evict_by_epoch() {
+        static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+        struct DropCounter;
+
+        impl Drop for DropCounter {
+            fn drop(&mut self) {
+                DROP_COUNT.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let n = 100usize;
+
+        for _ in 0..n {
+            DROP_COUNT.store(0, Ordering::SeqCst);
+            let mut cache = LruCache::unbounded();
+            for i in 1..n + 1 {
+                cache.update_epoch(i as u64);
+                cache.put(i, DropCounter {});
+            }
+            cache.evict_by_epoch(51);
+            assert_eq!(DROP_COUNT.load(Ordering::SeqCst), 50);
+        }
     }
 
     #[test]
