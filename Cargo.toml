@@ -2,6 +2,7 @@
 name = "lru"
 version = "0.8.0"
 authors = ["Jerome Froelich <jeromefroelic@hotmail.com>"]
+categories = ["caching", "no-std"]
 description = "A LRU cache implementation"
 homepage = "https://github.com/jeromefroe/lru-rs"
 repository = "https://github.com/jeromefroe/lru-rs.git"
