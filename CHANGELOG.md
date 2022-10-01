@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## [v0.8.1](https://github.com/jeromefroe/lru-rs/tree/0.8.1) - 2022-10-01
+
+- Add "caching" and "no-std" to list of categories.
+
 ## [v0.8.0](https://github.com/jeromefroe/lru-rs/tree/0.8.0) - 2022-09-11
 
 - Use `NonZeroUsize` for LRU capacity instead of usize.
