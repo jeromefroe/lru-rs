@@ -58,6 +58,9 @@
 
 #![feature(allocator_api)]
 
+mod estimate_size;
+
+extern crate fixedbitset;
 extern crate hashbrown;
 
 #[cfg(test)]
@@ -75,6 +78,8 @@ use std::mem;
 use std::ptr;
 
 use hashbrown::HashMap;
+
+use estimate_size::*;
 
 extern crate alloc;
 
