@@ -79,11 +79,50 @@ use std::ptr;
 
 use hashbrown::HashMap;
 
-use estimate_size::*;
+pub use estimate_size::*;
 
 extern crate alloc;
 
 type Epoch = u64;
+
+struct StatsMaybeUninit<T> {
+    inner: mem::MaybeUninit<T>,
+}
+
+impl<T> StatsMaybeUninit<T> {
+    pub const fn uninit() -> Self {
+        Self {
+            inner: mem::MaybeUninit::uninit(),
+        }
+    }
+
+    fn as_mut_ptr(&mut self) -> *mut T {
+        self.inner.as_mut_ptr()
+    }
+
+    const fn as_ptr(&self) -> *const T {
+        self.inner.as_ptr()
+    }
+}
+
+impl<T: EstimateSize> StatsMaybeUninit<T> {
+    pub fn new(val: T, kv_size: &mut usize) -> Self {
+        *kv_size += val.estimated_heap_size();
+        Self {
+            inner: mem::MaybeUninit::new(val),
+        }
+    }
+
+    unsafe fn drop_in_place(&mut self, kv_size: &mut usize) {
+        *kv_size -= self.inner.assume_init_ref().estimated_heap_size();
+        ptr::drop_in_place(self.inner.as_mut_ptr())
+    }
+
+    unsafe fn assume_init(self, kv_size: &mut usize) -> T {
+        *kv_size -= self.inner.assume_init_ref().estimated_heap_size();
+        self.inner.assume_init()
+    }
+}
 
 // Struct used to hold a reference to a key
 #[doc(hidden)]
@@ -134,31 +173,33 @@ impl<T> Borrow<[T]> for KeyRef<alloc::vec::Vec<T>> {
 // Struct used to hold a key value pair. Also contains references to previous and next entries
 // so we can maintain the entries in a linked list ordered by their use.
 struct LruEntry<K, V> {
-    key: mem::MaybeUninit<K>,
-    val: mem::MaybeUninit<V>,
+    key: StatsMaybeUninit<K>,
+    val: StatsMaybeUninit<V>,
     prev: *mut LruEntry<K, V>,
     next: *mut LruEntry<K, V>,
     epoch: Epoch,
 }
 
 impl<K, V> LruEntry<K, V> {
-    fn new(key: K, val: V, epoch: Epoch) -> Self {
-        LruEntry {
-            key: mem::MaybeUninit::new(key),
-            val: mem::MaybeUninit::new(val),
-            prev: ptr::null_mut(),
-            next: ptr::null_mut(),
-            epoch,
-        }
-    }
-
     fn new_sigil() -> Self {
         LruEntry {
-            key: mem::MaybeUninit::uninit(),
-            val: mem::MaybeUninit::uninit(),
+            key: StatsMaybeUninit::uninit(),
+            val: StatsMaybeUninit::uninit(),
             prev: ptr::null_mut(),
             next: ptr::null_mut(),
             epoch: 0,
+        }
+    }
+}
+
+impl<K: EstimateSize, V: EstimateSize> LruEntry<K, V> {
+    fn new(key: K, val: V, epoch: Epoch, kv_size: &mut usize) -> Self {
+        LruEntry {
+            key: StatsMaybeUninit::new(key, kv_size),
+            val: StatsMaybeUninit::new(val, kv_size),
+            prev: ptr::null_mut(),
+            next: ptr::null_mut(),
+            epoch,
         }
     }
 }
@@ -178,6 +219,14 @@ pub struct LruCache<K, V, S = DefaultHasher, A: Clone + Allocator = Global> {
     cur_epoch: Epoch,
 
     alloc: A,
+
+    kv_size: usize,
+}
+
+impl<K, V, S, A: Clone + Allocator> EstimateSize for LruCache<K, V, S, A> {
+    fn estimated_heap_size(&self) -> usize {
+        self.kv_size
+    }
 }
 
 impl<K: Hash + Eq, V, S: BuildHasher, A: Clone + Allocator> LruCache<K, V, S, A> {
@@ -212,6 +261,7 @@ impl<K: Hash + Eq, V, S: BuildHasher, A: Clone + Allocator> LruCache<K, V, S, A>
             tail: Box::into_raw(Box::new_in(LruEntry::new_sigil(), alloc.clone())),
             cur_epoch: 0,
             alloc,
+            kv_size: 0,
         };
 
         unsafe {
@@ -295,7 +345,9 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     }
 }
 
-impl<K: Hash + Eq, V, S: BuildHasher, A: Clone + Allocator> LruCache<K, V, S, A> {
+impl<K: Hash + Eq + EstimateSize, V: EstimateSize, S: BuildHasher, A: Clone + Allocator>
+    LruCache<K, V, S, A>
+{
     /// Puts a key-value pair into cache. If the key already exists in the cache, then it updates
     /// the key's value and returns the old value. Otherwise, `None` is returned.
     ///
@@ -314,33 +366,6 @@ impl<K: Hash + Eq, V, S: BuildHasher, A: Clone + Allocator> LruCache<K, V, S, A>
     /// ```
     pub fn put(&mut self, k: K, v: V) -> Option<V> {
         self.capturing_put(k, v, false).map(|(_, v)| v)
-    }
-
-    /// Pushes a key-value pair into the cache. If an entry with key `k` already exists in
-    /// the cache or another cache entry is removed (due to the lru's capacity),
-    /// then it returns the old entry's key-value pair. Otherwise, returns `None`.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use lru::LruCache;
-    /// let mut cache = LruCache::new(2);
-    ///
-    /// assert_eq!(None, cache.push(1, "a"));
-    /// assert_eq!(None, cache.push(2, "b"));
-    ///
-    /// // This push call returns (2, "b") because that was previously 2's entry in the cache.
-    /// assert_eq!(Some((2, "b")), cache.push(2, "beta"));
-    ///
-    /// // This push call returns (1, "a") because the cache is at capacity and 1's entry was the lru entry.
-    /// assert_eq!(Some((1, "a")), cache.push(3, "alpha"));
-    ///
-    /// assert_eq!(cache.get(&1), None);
-    /// assert_eq!(cache.get(&2), Some(&"beta"));
-    /// assert_eq!(cache.get(&3), Some(&"alpha"));
-    /// ```
-    pub fn push(&mut self, k: K, v: V) -> Option<(K, V)> {
-        self.capturing_put(k, v, true)
     }
 
     // Used internally by `put` and `push` to add a new entry to the lru.
@@ -390,10 +415,15 @@ impl<K: Hash + Eq, V, S: BuildHasher, A: Clone + Allocator> LruCache<K, V, S, A>
             let mut old_node = self.map.remove(&old_key).unwrap();
 
             // read out the node's old key and value and then replace it
-            let replaced = unsafe { (old_node.key.assume_init(), old_node.val.assume_init()) };
+            let replaced = unsafe {
+                (
+                    old_node.key.assume_init(&mut self.kv_size),
+                    old_node.val.assume_init(&mut self.kv_size),
+                )
+            };
 
-            old_node.key = mem::MaybeUninit::new(k);
-            old_node.val = mem::MaybeUninit::new(v);
+            old_node.key = StatsMaybeUninit::new(k, &mut self.kv_size);
+            old_node.val = StatsMaybeUninit::new(v, &mut self.kv_size);
 
             let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
             self.detach(node_ptr);
@@ -403,11 +433,291 @@ impl<K: Hash + Eq, V, S: BuildHasher, A: Clone + Allocator> LruCache<K, V, S, A>
             // if the cache is not full allocate a new LruEntry
             (
                 None,
-                Box::<_, A>::new_in(LruEntry::new(k, v, self.cur_epoch), self.alloc.clone()),
+                Box::<_, A>::new_in(
+                    LruEntry::new(k, v, self.cur_epoch, &mut self.kv_size),
+                    self.alloc.clone(),
+                ),
             )
         }
     }
 
+    /// Pushes a key-value pair into the cache. If an entry with key `k` already exists in
+    /// the cache or another cache entry is removed (due to the lru's capacity),
+    /// then it returns the old entry's key-value pair. Otherwise, returns `None`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// assert_eq!(None, cache.push(1, "a"));
+    /// assert_eq!(None, cache.push(2, "b"));
+    ///
+    /// // This push call returns (2, "b") because that was previously 2's entry in the cache.
+    /// assert_eq!(Some((2, "b")), cache.push(2, "beta"));
+    ///
+    /// // This push call returns (1, "a") because the cache is at capacity and 1's entry was the lru entry.
+    /// assert_eq!(Some((1, "a")), cache.push(3, "alpha"));
+    ///
+    /// assert_eq!(cache.get(&1), None);
+    /// assert_eq!(cache.get(&2), Some(&"beta"));
+    /// assert_eq!(cache.get(&3), Some(&"alpha"));
+    /// ```
+    pub fn push(&mut self, k: K, v: V) -> Option<(K, V)> {
+        self.capturing_put(k, v, true)
+    }
+
+    /// Returns a reference to the value of the key in the cache if it is
+    /// present in the cache and moves the key to the head of the LRU list.
+    /// If the key does not exist the provided `Fn` is used to populate the list and a reference
+    /// is returned.
+    ///
+    /// This method will only return `None` when the capacity of the cache is 0 and no entries
+    /// can be populated.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// cache.put(1, "a");
+    /// cache.put(2, "b");
+    /// cache.put(2, "c");
+    /// cache.put(3, "d");
+    ///
+    /// assert_eq!(cache.get_or_insert(2, ||"a"), Some(&"c"));
+    /// assert_eq!(cache.get_or_insert(3, ||"a"), Some(&"d"));
+    /// assert_eq!(cache.get_or_insert(1, ||"a"), Some(&"a"));
+    /// assert_eq!(cache.get_or_insert(1, ||"b"), Some(&"a"));
+    /// ```
+    pub fn get_or_insert<'a, F>(&'a mut self, k: K, f: F) -> Option<&'a V>
+    where
+        F: Fn() -> V,
+    {
+        if let Some(node) = self.map.get_mut(&k) {
+            let node_ptr: *mut LruEntry<K, V> = &mut **node;
+
+            self.detach(node_ptr);
+            self.attach(node_ptr);
+
+            Some(unsafe { &(*(*node_ptr).val.as_ptr()) as &V })
+        } else {
+            // If the capacity is 0 we do nothing,
+            // this is the only circumstance that should return None
+            if self.cap() == 0 {
+                return None;
+            }
+            let v = f();
+            let (_, mut node) = self.replace_or_create_node(k, v);
+
+            let node_ptr: *mut LruEntry<K, V> = &mut *node;
+            self.attach(node_ptr);
+
+            let keyref = unsafe { (*node_ptr).key.as_ptr() };
+            self.map.insert(KeyRef { k: keyref }, node);
+            Some(unsafe { &(*(*node_ptr).val.as_ptr()) as &V })
+        }
+    }
+
+    /// Removes and returns the value corresponding to the key from the cache or
+    /// `None` if it does not exist.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// cache.put(2, "a");
+    ///
+    /// assert_eq!(cache.pop(&1), None);
+    /// assert_eq!(cache.pop(&2), Some("a"));
+    /// assert_eq!(cache.pop(&2), None);
+    /// assert_eq!(cache.len(), 0);
+    /// ```
+    pub fn pop<Q>(&mut self, k: &Q) -> Option<V>
+    where
+        KeyRef<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        match self.map.remove(k) {
+            None => None,
+            Some(mut old_node) => {
+                unsafe {
+                    ptr::drop_in_place(old_node.key.as_mut_ptr());
+                }
+                let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
+                self.detach(node_ptr);
+                unsafe { Some(old_node.val.assume_init(&mut self.kv_size)) }
+            }
+        }
+    }
+
+    /// Removes and returns the key and the value corresponding to the key from the cache or
+    /// `None` if it does not exist.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// cache.put(1, "a");
+    /// cache.put(2, "a");
+    ///
+    /// assert_eq!(cache.pop(&1), Some("a"));
+    /// assert_eq!(cache.pop_entry(&2), Some((2, "a")));
+    /// assert_eq!(cache.pop(&1), None);
+    /// assert_eq!(cache.pop_entry(&2), None);
+    /// assert_eq!(cache.len(), 0);
+    /// ```
+    pub fn pop_entry<Q>(&mut self, k: &Q) -> Option<(K, V)>
+    where
+        KeyRef<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        match self.map.remove(k) {
+            None => None,
+            Some(mut old_node) => {
+                let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
+                self.detach(node_ptr);
+                unsafe {
+                    Some((
+                        old_node.key.assume_init(&mut self.kv_size),
+                        old_node.val.assume_init(&mut self.kv_size),
+                    ))
+                }
+            }
+        }
+    }
+
+    /// Removes and returns the key and value corresponding to the least recently
+    /// used item or `None` if the cache is empty.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// cache.put(2, "a");
+    /// cache.put(3, "b");
+    /// cache.put(4, "c");
+    /// cache.get(&3);
+    ///
+    /// assert_eq!(cache.pop_lru(), Some((4, "c")));
+    /// assert_eq!(cache.pop_lru(), Some((3, "b")));
+    /// assert_eq!(cache.pop_lru(), None);
+    /// assert_eq!(cache.len(), 0);
+    /// ```
+    pub fn pop_lru(&mut self) -> Option<(K, V)> {
+        let node = self.remove_last()?;
+        // N.B.: Can't destructure directly because of https://github.com/rust-lang/rust/issues/28536
+        let node = *node;
+        let LruEntry { key, val, .. } = node;
+        unsafe {
+            Some((
+                key.assume_init(&mut self.kv_size),
+                val.assume_init(&mut self.kv_size),
+            ))
+        }
+    }
+
+    /// Resizes the cache. If the new capacity is smaller than the size of the current
+    /// cache any entries past the new capacity are discarded.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache: LruCache<isize, &str> = LruCache::new(2);
+    ///
+    /// cache.put(1, "a");
+    /// cache.put(2, "b");
+    /// cache.resize(4);
+    /// cache.put(3, "c");
+    /// cache.put(4, "d");
+    ///
+    /// assert_eq!(cache.len(), 4);
+    /// assert_eq!(cache.get(&1), Some(&"a"));
+    /// assert_eq!(cache.get(&2), Some(&"b"));
+    /// assert_eq!(cache.get(&3), Some(&"c"));
+    /// assert_eq!(cache.get(&4), Some(&"d"));
+    /// ```
+    pub fn resize(&mut self, cap: usize) {
+        // return early if capacity doesn't change
+        if cap == self.cap {
+            return;
+        }
+
+        while self.map.len() > cap {
+            self.pop_lru();
+        }
+        self.map.shrink_to_fit();
+
+        self.cap = cap;
+    }
+
+    /// Update the current epoch. The given epoch should be greater than the current epoch.
+    pub fn update_epoch(&mut self, epoch: Epoch) {
+        assert!(epoch > self.cur_epoch);
+        self.cur_epoch = epoch;
+    }
+
+    pub fn evict_by_epoch(&mut self, epoch: Epoch) {
+        loop {
+            if self.is_empty() {
+                break;
+            }
+
+            let node = unsafe { (*self.tail).prev };
+            let node_epoch = unsafe { (*node).epoch };
+            if node_epoch < epoch {
+                let old_key = KeyRef {
+                    k: unsafe { &(*(*node).key.as_ptr()) },
+                };
+                let mut old_node = self.map.remove(&old_key).unwrap();
+                unsafe {
+                    old_node.key.drop_in_place(&mut self.kv_size);
+                    old_node.val.drop_in_place(&mut self.kv_size);
+                }
+                let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
+
+                self.detach(node_ptr);
+            } else {
+                break;
+            }
+        }
+
+        self.map.shrink_to_fit();
+    }
+
+    /// Clears the contents of the cache.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache: LruCache<isize, &str> = LruCache::new(2);
+    /// assert_eq!(cache.len(), 0);
+    ///
+    /// cache.put(1, "a");
+    /// assert_eq!(cache.len(), 1);
+    ///
+    /// cache.put(2, "b");
+    /// assert_eq!(cache.len(), 2);
+    ///
+    /// cache.clear();
+    /// assert_eq!(cache.len(), 0);
+    /// ```
+    pub fn clear(&mut self) {
+        while self.pop_lru().is_some() {}
+    }
+}
+
+impl<K: Hash + Eq, V, S: BuildHasher, A: Clone + Allocator> LruCache<K, V, S, A> {
     /// Returns a reference to the value of the key in the cache or `None` if it is not
     /// present in the cache. Moves the key to the head of the LRU list if it exists.
     ///
@@ -475,59 +785,6 @@ impl<K: Hash + Eq, V, S: BuildHasher, A: Clone + Allocator> LruCache<K, V, S, A>
             Some(unsafe { &mut (*(*node_ptr).val.as_mut_ptr()) as &mut V })
         } else {
             None
-        }
-    }
-
-    /// Returns a reference to the value of the key in the cache if it is
-    /// present in the cache and moves the key to the head of the LRU list.
-    /// If the key does not exist the provided `Fn` is used to populate the list and a reference
-    /// is returned.
-    ///
-    /// This method will only return `None` when the capacity of the cache is 0 and no entries
-    /// can be populated.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use lru::LruCache;
-    /// let mut cache = LruCache::new(2);
-    ///
-    /// cache.put(1, "a");
-    /// cache.put(2, "b");
-    /// cache.put(2, "c");
-    /// cache.put(3, "d");
-    ///
-    /// assert_eq!(cache.get_or_insert(2, ||"a"), Some(&"c"));
-    /// assert_eq!(cache.get_or_insert(3, ||"a"), Some(&"d"));
-    /// assert_eq!(cache.get_or_insert(1, ||"a"), Some(&"a"));
-    /// assert_eq!(cache.get_or_insert(1, ||"b"), Some(&"a"));
-    /// ```
-    pub fn get_or_insert<'a, F>(&'a mut self, k: K, f: F) -> Option<&'a V>
-    where
-        F: Fn() -> V,
-    {
-        if let Some(node) = self.map.get_mut(&k) {
-            let node_ptr: *mut LruEntry<K, V> = &mut **node;
-
-            self.detach(node_ptr);
-            self.attach(node_ptr);
-
-            Some(unsafe { &(*(*node_ptr).val.as_ptr()) as &V })
-        } else {
-            // If the capacity is 0 we do nothing,
-            // this is the only circumstance that should return None
-            if self.cap() == 0 {
-                return None;
-            }
-            let v = f();
-            let (_, mut node) = self.replace_or_create_node(k, v);
-
-            let node_ptr: *mut LruEntry<K, V> = &mut *node;
-            self.attach(node_ptr);
-
-            let keyref = unsafe { (*node_ptr).key.as_ptr() };
-            self.map.insert(KeyRef { k: keyref }, node);
-            Some(unsafe { &(*(*node_ptr).val.as_ptr()) as &V })
         }
     }
 
@@ -639,100 +896,6 @@ impl<K: Hash + Eq, V, S: BuildHasher, A: Clone + Allocator> LruCache<K, V, S, A>
         self.map.contains_key(k)
     }
 
-    /// Removes and returns the value corresponding to the key from the cache or
-    /// `None` if it does not exist.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use lru::LruCache;
-    /// let mut cache = LruCache::new(2);
-    ///
-    /// cache.put(2, "a");
-    ///
-    /// assert_eq!(cache.pop(&1), None);
-    /// assert_eq!(cache.pop(&2), Some("a"));
-    /// assert_eq!(cache.pop(&2), None);
-    /// assert_eq!(cache.len(), 0);
-    /// ```
-    pub fn pop<Q>(&mut self, k: &Q) -> Option<V>
-    where
-        KeyRef<K>: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
-    {
-        match self.map.remove(k) {
-            None => None,
-            Some(mut old_node) => {
-                unsafe {
-                    ptr::drop_in_place(old_node.key.as_mut_ptr());
-                }
-                let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
-                self.detach(node_ptr);
-                unsafe { Some(old_node.val.assume_init()) }
-            }
-        }
-    }
-
-    /// Removes and returns the key and the value corresponding to the key from the cache or
-    /// `None` if it does not exist.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use lru::LruCache;
-    /// let mut cache = LruCache::new(2);
-    ///
-    /// cache.put(1, "a");
-    /// cache.put(2, "a");
-    ///
-    /// assert_eq!(cache.pop(&1), Some("a"));
-    /// assert_eq!(cache.pop_entry(&2), Some((2, "a")));
-    /// assert_eq!(cache.pop(&1), None);
-    /// assert_eq!(cache.pop_entry(&2), None);
-    /// assert_eq!(cache.len(), 0);
-    /// ```
-    pub fn pop_entry<Q>(&mut self, k: &Q) -> Option<(K, V)>
-    where
-        KeyRef<K>: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
-    {
-        match self.map.remove(k) {
-            None => None,
-            Some(mut old_node) => {
-                let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
-                self.detach(node_ptr);
-                unsafe { Some((old_node.key.assume_init(), old_node.val.assume_init())) }
-            }
-        }
-    }
-
-    /// Removes and returns the key and value corresponding to the least recently
-    /// used item or `None` if the cache is empty.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use lru::LruCache;
-    /// let mut cache = LruCache::new(2);
-    ///
-    /// cache.put(2, "a");
-    /// cache.put(3, "b");
-    /// cache.put(4, "c");
-    /// cache.get(&3);
-    ///
-    /// assert_eq!(cache.pop_lru(), Some((4, "c")));
-    /// assert_eq!(cache.pop_lru(), Some((3, "b")));
-    /// assert_eq!(cache.pop_lru(), None);
-    /// assert_eq!(cache.len(), 0);
-    /// ```
-    pub fn pop_lru(&mut self) -> Option<(K, V)> {
-        let node = self.remove_last()?;
-        // N.B.: Can't destructure directly because of https://github.com/rust-lang/rust/issues/28536
-        let node = *node;
-        let LruEntry { key, val, .. } = node;
-        unsafe { Some((key.assume_init(), val.assume_init())) }
-    }
-
     /// Returns the number of key-value pairs that are currently in the the cache.
     ///
     /// # Example
@@ -784,97 +947,6 @@ impl<K: Hash + Eq, V, S: BuildHasher, A: Clone + Allocator> LruCache<K, V, S, A>
         self.cap
     }
 
-    /// Resizes the cache. If the new capacity is smaller than the size of the current
-    /// cache any entries past the new capacity are discarded.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use lru::LruCache;
-    /// let mut cache: LruCache<isize, &str> = LruCache::new(2);
-    ///
-    /// cache.put(1, "a");
-    /// cache.put(2, "b");
-    /// cache.resize(4);
-    /// cache.put(3, "c");
-    /// cache.put(4, "d");
-    ///
-    /// assert_eq!(cache.len(), 4);
-    /// assert_eq!(cache.get(&1), Some(&"a"));
-    /// assert_eq!(cache.get(&2), Some(&"b"));
-    /// assert_eq!(cache.get(&3), Some(&"c"));
-    /// assert_eq!(cache.get(&4), Some(&"d"));
-    /// ```
-    pub fn resize(&mut self, cap: usize) {
-        // return early if capacity doesn't change
-        if cap == self.cap {
-            return;
-        }
-
-        while self.map.len() > cap {
-            self.pop_lru();
-        }
-        self.map.shrink_to_fit();
-
-        self.cap = cap;
-    }
-
-    /// Update the current epoch. The given epoch should be greater than the current epoch.
-    pub fn update_epoch(&mut self, epoch: Epoch) {
-        assert!(epoch > self.cur_epoch);
-        self.cur_epoch = epoch;
-    }
-
-    pub fn evict_by_epoch(&mut self, epoch: Epoch) {
-        loop {
-            if self.is_empty() {
-                break;
-            }
-
-            let node = unsafe { (*self.tail).prev };
-            let node_epoch = unsafe { (*node).epoch };
-            if node_epoch < epoch {
-                let old_key = KeyRef {
-                    k: unsafe { &(*(*node).key.as_ptr()) },
-                };
-                let mut old_node = self.map.remove(&old_key).unwrap();
-                unsafe {
-                    ptr::drop_in_place(old_node.key.as_mut_ptr());
-                    ptr::drop_in_place(old_node.val.as_mut_ptr());
-                }
-                let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
-
-                self.detach(node_ptr);
-            } else {
-                break;
-            }
-        }
-
-        self.map.shrink_to_fit();
-    }
-
-    /// Clears the contents of the cache.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use lru::LruCache;
-    /// let mut cache: LruCache<isize, &str> = LruCache::new(2);
-    /// assert_eq!(cache.len(), 0);
-    ///
-    /// cache.put(1, "a");
-    /// assert_eq!(cache.len(), 1);
-    ///
-    /// cache.put(2, "b");
-    /// assert_eq!(cache.len(), 2);
-    ///
-    /// cache.clear();
-    /// assert_eq!(cache.len(), 0);
-    /// ```
-    pub fn clear(&mut self) {
-        while self.pop_lru().is_some() {}
-    }
-
     /// An iterator visiting all entries in most-recently used order. The iterator element type is
     /// `(&K, &V)`.
     ///
@@ -907,11 +979,17 @@ impl<K: Hash + Eq, V, S: BuildHasher, A: Clone + Allocator> LruCache<K, V, S, A>
     /// # Examples
     ///
     /// ```
-    /// use lru::LruCache;
+    /// use lru::{EstimateSize, LruCache};
     ///
     /// struct HddBlock {
     ///     dirty: bool,
     ///     data: [u8; 512]
+    /// }
+    ///
+    /// impl EstimateSize for HddBlock {
+    ///     fn estimated_heap_size(&self) -> usize {
+    ///         0
+    ///     }
     /// }
     ///
     /// let mut cache = LruCache::new(3);
@@ -1175,7 +1253,7 @@ where
     cache: LruCache<K, V>,
 }
 
-impl<K, V> Iterator for IntoIter<K, V>
+impl<K: EstimateSize, V: EstimateSize> Iterator for IntoIter<K, V>
 where
     K: Hash + Eq,
 {
@@ -1195,10 +1273,10 @@ where
     }
 }
 
-impl<K, V> ExactSizeIterator for IntoIter<K, V> where K: Hash + Eq {}
-impl<K, V> FusedIterator for IntoIter<K, V> where K: Hash + Eq {}
+impl<K: EstimateSize, V: EstimateSize> ExactSizeIterator for IntoIter<K, V> where K: Hash + Eq {}
+impl<K: EstimateSize, V: EstimateSize> FusedIterator for IntoIter<K, V> where K: Hash + Eq {}
 
-impl<K: Hash + Eq, V> IntoIterator for LruCache<K, V> {
+impl<K: Hash + Eq + EstimateSize, V: EstimateSize> IntoIterator for LruCache<K, V> {
     type Item = (K, V);
     type IntoIter = IntoIter<K, V>;
 
@@ -1209,7 +1287,7 @@ impl<K: Hash + Eq, V> IntoIterator for LruCache<K, V> {
 
 #[cfg(test)]
 mod tests {
-    use super::LruCache;
+    use super::{EstimateSize, LruCache};
     use scoped_threadpool::Pool;
     use std::fmt::Debug;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1594,6 +1672,12 @@ mod tests {
             }
         }
 
+        impl EstimateSize for DropCounter {
+            fn estimated_heap_size(&self) -> usize {
+                0
+            }
+        }
+
         let n = 100usize;
 
         for _ in 0..n {
@@ -1890,6 +1974,12 @@ mod tests {
             }
         }
 
+        impl EstimateSize for DropCounter {
+            fn estimated_heap_size(&self) -> usize {
+                0
+            }
+        }
+
         let n = 100;
         for _ in 0..n {
             let mut cache = LruCache::new(1);
@@ -1909,6 +1999,12 @@ mod tests {
         impl Drop for DropCounter {
             fn drop(&mut self) {
                 DROP_COUNT.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        impl EstimateSize for DropCounter {
+            fn estimated_heap_size(&self) -> usize {
+                0
             }
         }
 
@@ -1932,6 +2028,12 @@ mod tests {
         impl Drop for DropCounter {
             fn drop(&mut self) {
                 DROP_COUNT.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        impl EstimateSize for DropCounter {
+            fn estimated_heap_size(&self) -> usize {
+                0
             }
         }
 
@@ -1962,6 +2064,12 @@ mod tests {
         impl Drop for KeyDropCounter {
             fn drop(&mut self) {
                 DROP_COUNT.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        impl EstimateSize for KeyDropCounter {
+            fn estimated_heap_size(&self) -> usize {
+                0
             }
         }
 
