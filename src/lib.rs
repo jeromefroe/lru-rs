@@ -87,6 +87,8 @@ use std::collections::HashMap;
 
 extern crate alloc;
 
+pub mod lazy;
+
 // Struct used to hold a reference to a key
 #[doc(hidden)]
 pub struct KeyRef<K> {
