@@ -565,33 +565,6 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         }
     }
 
-    // pub fn get_or_insert_cost<'a, F>(&'a mut self, k: K, f: F) -> &'a V
-    // where
-    //     F: FnOnce() -> (V, usize),
-    // {
-    //     if let Some(node) = self.map.get_mut(&KeyRef { k: &k }) {
-    //         let node_ptr: *mut LruEntry<K, V> = &mut **node;
-
-    //         self.detach(node_ptr);
-    //         self.attach(node_ptr);
-
-    //         unsafe { &(*(*node_ptr).val.as_ptr()) as &V }
-    //     } else {
-    //         let (v, cost) = f();
-    //         let (_, mut node) = self.replace_or_create_node(k, v, cost);
-
-    //         let node_ptr: *mut LruEntry<K, V> = &mut *node;
-    //         self.attach(node_ptr);
-
-    //         let keyref = unsafe { (*node_ptr).key.as_ptr() };
-    //         self.map.insert(KeyRef { k: keyref }, node);
-
-    //         self.shrink_within_cost();
-
-    //         unsafe { &(*(*node_ptr).val.as_ptr()) as &V }
-    //     }
-    // }
-
     /// Returns a mutable reference to the value of the key in the cache if it is
     /// present in the cache and moves the key to the head of the LRU list.
     /// If the key does not exist the provided `FnOnce` is used to populate
@@ -640,33 +613,6 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             unsafe { &mut (*(*node_ptr).val.as_mut_ptr()) as &mut V }
         }
     }
-
-    // pub fn get_or_insert_cost_mut<'a, F>(&'a mut self, k: K, f: F) -> &'a mut V
-    // where
-    //     F: FnOnce() -> (V, usize),
-    // {
-    //     if let Some(node) = self.map.get_mut(&KeyRef { k: &k }) {
-    //         let node_ptr: *mut LruEntry<K, V> = &mut **node;
-
-    //         self.detach(node_ptr);
-    //         self.attach(node_ptr);
-
-    //         unsafe { &mut (*(*node_ptr).val.as_mut_ptr()) as &mut V }
-    //     } else {
-    //         let (v, cost) = f();
-    //         let (_, mut node) = self.replace_or_create_node(k, v, cost);
-
-    //         let node_ptr: *mut LruEntry<K, V> = &mut *node;
-    //         self.attach(node_ptr);
-
-    //         let keyref = unsafe { (*node_ptr).key.as_ptr() };
-    //         self.map.insert(KeyRef { k: keyref }, node);
-
-    //         self.shrink_within_cost();
-
-    //         unsafe { &mut (*(*node_ptr).val.as_mut_ptr()) as &mut V }
-    //     }
-    // }
 
     /// Returns a reference to the value corresponding to the key in the cache or `None` if it is
     /// not present in the cache. Unlike `get`, `peek` does not update the LRU list so the key's
