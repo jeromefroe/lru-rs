@@ -21,3 +21,7 @@ hashbrown = { version = "0.12", optional = true }
 [dev-dependencies]
 scoped_threadpool = "0.1.*"
 stats_alloc = "0.1.*"
+rand = "0.8.5"
+
+[[bench]]
+name = "benchmarks"
