@@ -1532,6 +1532,57 @@ mod tests {
     }
 
     #[test]
+    fn test_put_with_cost_removes_oldest() {
+        let mut cache = LruCache::new(NonZeroUsize::new(11).unwrap());
+
+        assert_eq!(cache.put_with_cost("apple", "red", 3), None);
+        assert_eq!(cache.put_with_cost("banana", "yellow", 6), None);
+        assert_eq!(cache.put_with_cost("pear", "green", 5), None);
+
+        assert!(cache.get(&"apple").is_none());
+        assert_opt_eq(cache.get(&"banana"), "yellow");
+        assert_opt_eq(cache.get(&"pear"), "green");
+
+        // Even though we inserted "apple" into the cache earlier it has since been removed from
+        // the cache so there is no current value for `put` to return.
+        assert_eq!(cache.put_with_cost("apple", "green", 5), None);
+        assert_eq!(cache.put_with_cost("tomato", "red", 3), None);
+
+        assert!(cache.get(&"pear").is_none());
+        assert!(cache.get(&"banana").is_none());
+        assert_opt_eq(cache.get(&"apple"), "green");
+        assert_opt_eq(cache.get(&"tomato"), "red");
+    }
+
+    #[test]
+    fn test_put_with_cost_way_too_big() {
+        let mut cache = LruCache::new(NonZeroUsize::new(11).unwrap());
+
+        assert_eq!(cache.put_with_cost("apple", "red", 3), None);
+        assert_eq!(cache.put_with_cost("banana", "yellow", 6), None);
+        assert_eq!(cache.put_with_cost("pear", "green", 5000), None);
+
+        assert_opt_eq(cache.get(&"apple"), "red");
+        assert_opt_eq(cache.get(&"banana"), "yellow");
+        assert!(cache.get(&"pear").is_none());
+    }
+
+    #[test]
+    fn test_put_with_cost_evict_multiple2() {
+        let mut cache = LruCache::new(NonZeroUsize::new(16).unwrap());
+
+        assert_eq!(cache.put_with_cost("apple", "red", 3), None);
+        assert_eq!(cache.put_with_cost("banana", "yellow", 6), None);
+        assert_eq!(cache.put_with_cost("plum", "purple", 6), None);
+        assert_eq!(cache.put_with_cost("pear", "green", 10), None);
+
+        assert!(cache.get(&"apple").is_none());
+        assert!(cache.get(&"banana").is_none());
+        assert_opt_eq(cache.get(&"plum"), "purple");
+        assert_opt_eq(cache.get(&"pear"), "green");
+    }
+
+    #[test]
     fn test_peek() {
         let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
 
