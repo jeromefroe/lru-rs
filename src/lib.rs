@@ -290,7 +290,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         cache
     }
 
-    /// Puts a key-value pair into cache. If the key already exists in the cache, then it updates
+    /// Puts a key-value pair into cache, with a cost of 1. If the key already exists in the cache, then it updates
     /// the key's value and returns the old value. Otherwise, `None` is returned.
     ///
     /// # Example
@@ -311,11 +311,28 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         self.put_with_cost(k, v, 1)
     }
 
+    /// Puts a key-value pair into cache, with the given cost. If the key already exists in the cache, then it updates
+    /// the key's value and returns the old value. Otherwise, `None` is returned.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// use std::num::NonZeroUsize;
+    /// let mut cache = LruCache::new(NonZeroUsize::new(12).unwrap());
+    ///
+    /// assert_eq!(None, cache.put_with_cost(1, "aa", 2));
+    /// assert_eq!(None, cache.put_with_cost(2, "bbbb", 4));
+    /// assert_eq!(Some("bbbb"), cache.put_with_cost(2, "cccccc", 6));
+    ///
+    /// assert_eq!(cache.get(&1), Some(&"aa"));
+    /// assert_eq!(cache.get(&2), Some(&"cccccc"));
+    /// ```
     pub fn put_with_cost(&mut self, k: K, v: V, cost: usize) -> Option<V> {
         self.capturing_put(k, v, false, cost).map(|(_, v)| v)
     }
 
-    /// Pushes a key-value pair into the cache. If an entry with key `k` already exists in
+    /// Pushes a key-value pair into the cache, with a cost of 1. If an entry with key `k` already exists in
     /// the cache or another cache entry is removed (due to the lru's capacity),
     /// then it returns the old entry's key-value pair. Otherwise, returns `None`.
     ///
@@ -343,6 +360,30 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         self.push_with_cost(k, v, 1)
     }
 
+    /// Pushes a key-value pair into the cache, with a given cost. If an entry with key `k` already exists in
+    /// the cache or another cache entry is removed (due to the lru's capacity),
+    /// then it returns the old entry's key-value pair. Otherwise, returns `None`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// use std::num::NonZeroUsize;
+    /// let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+    ///
+    /// assert_eq!(None, cache.push_with_cost(1, "a", 1));
+    /// assert_eq!(None, cache.push_with_cost(2, "b", 1));
+    ///
+    /// // This push call returns (2, "b") because that was previously 2's entry in the cache.
+    /// assert_eq!(Some((2, "b")), cache.push_with_cost(2, "beta", 1));
+    ///
+    /// // This push call returns (1, "a") because the cache is at capacity and 1's entry was the lru entry.
+    /// assert_eq!(Some((1, "a")), cache.push_with_cost(3, "alpha", 1));
+    ///
+    /// assert_eq!(cache.get(&1), None);
+    /// assert_eq!(cache.get(&2), Some(&"beta"));
+    /// assert_eq!(cache.get(&3), Some(&"alpha"));
+    /// ```
     pub fn push_with_cost(&mut self, k: K, v: V, cost: usize) -> Option<(K, V)> {
         self.capturing_put(k, v, true, cost)
     }
@@ -919,6 +960,25 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         self.map.len()
     }
 
+    /// Returns the total cost of all key-value pairs that are currently in the the cache.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// use std::num::NonZeroUsize;
+    /// let mut cache = LruCache::new(NonZeroUsize::new(4).unwrap());
+    /// assert_eq!(cache.cost(), 0);
+    ///
+    /// cache.put_with_cost(1, "a", 2);
+    /// assert_eq!(cache.cost(), 2);
+    ///
+    /// cache.put_with_cost(2, "b", 1);
+    /// assert_eq!(cache.cost(), 3);
+    ///
+    /// cache.put_with_cost(3, "c", 3);
+    /// assert_eq!(cache.cost(), 4);
+    /// ```
     pub fn cost(&self) -> usize {
         self.cost
     }
@@ -940,7 +1000,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         self.map.len() == 0
     }
 
-    /// Returns the maximum number of key-value pairs the cache can hold.
+    /// Returns the maximum allowed total cost of all key-value pairs in the cache.
     ///
     /// # Example
     ///
