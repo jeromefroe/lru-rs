@@ -354,10 +354,9 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             None => {
                 let (replaced, mut node) = self.replace_or_create_node(k, v);
 
-                let node_ptr: *mut LruEntry<K, V> = &mut *node;
-                self.attach(node_ptr);
+                self.attach(&mut *node);
 
-                let keyref = unsafe { (*node_ptr).key.as_ptr() };
+                let keyref = node.key.as_ptr();
                 self.map.insert(KeyRef { k: keyref }, node);
 
                 replaced.filter(|_| capture)
