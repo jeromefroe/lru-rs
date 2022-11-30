@@ -58,6 +58,7 @@
 //! ```
 
 #![no_std]
+#![feature(test)]
 #![cfg_attr(feature = "nightly", feature(negative_impls, auto_traits))]
 
 #[cfg(feature = "hashbrown")]
@@ -65,6 +66,8 @@ extern crate hashbrown;
 
 #[cfg(test)]
 extern crate scoped_threadpool;
+
+extern crate test;
 
 use alloc::borrow::Borrow;
 use alloc::boxed::Box;
@@ -2058,6 +2061,34 @@ mod tests {
         assert_eq!(cache.pop_lru(), Some((1, 1)));
         assert_eq!(cache.pop_lru(), Some((0, 0)));
         assert_eq!(cache.pop_lru(), None);
+    }
+
+    use test::Bencher;
+
+    #[bench]
+    fn bench_pop_lru(b: &mut Bencher) {
+        b.iter(|| {
+            static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+            struct DropCounter;
+
+            impl Drop for DropCounter {
+                fn drop(&mut self) {
+                    DROP_COUNT.fetch_add(1, Ordering::SeqCst);
+                }
+            }
+
+            let n = test::black_box(100);
+
+            for _ in 0..n {
+                let mut cache = LruCache::new(NonZeroUsize::new(1).unwrap());
+
+                let n = test::black_box(100);
+                for i in 0..n {
+                    cache.put(i, DropCounter {});
+                }
+            }
+        });
     }
 }
 
