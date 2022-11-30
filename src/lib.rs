@@ -2066,7 +2066,7 @@ mod tests {
     use test::Bencher;
 
     #[bench]
-    fn bench_pop_lru(b: &mut Bencher) {
+    fn bench_pointer_impl(b: &mut Bencher) {
         b.iter(|| {
             static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
 
