@@ -342,11 +342,15 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
 
         match node_ref {
             Some(node_ref) => {
-                let node_ptr: *mut LruEntry<K, V> = node_ref.as_ptr();
-
                 // if the key is already in the cache just update its value and move it to the
                 // front of the list
-                unsafe { mem::swap(&mut v, &mut *(*node_ptr).val.as_mut_ptr()) }
+                let node_ptr: *mut LruEntry<K, V> = node_ref.as_ptr();
+
+                // gets a reference to the node to perform a swap and drops it right after
+                let node_ref = unsafe { &mut (*(*node_ptr).val.as_mut_ptr()) };
+                mem::swap(&mut v, node_ref);
+                let _ = node_ref;
+
                 self.detach(node_ptr);
                 self.attach(node_ptr);
                 Some((k, v))
