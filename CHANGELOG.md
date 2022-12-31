@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## [v0.9.0](https://github.com/jeromefroe/lru-rs/tree/0.9.0) - 2022-12-31
+
+- Update dependency on hashbrown to 0.13.
+- Change `LruCache.map` to hold a pointer, rather than owned `LruEntry`.
+
 ## [v0.8.1](https://github.com/jeromefroe/lru-rs/tree/0.8.1) - 2022-10-01
 
 - Add "caching" and "no-std" to list of categories.
