@@ -58,7 +58,6 @@
 //! ```
 
 #![no_std]
-#![cfg_attr(feature = "nightly", feature(negative_impls, auto_traits))]
 
 #[cfg(feature = "hashbrown")]
 extern crate hashbrown;
@@ -88,8 +87,7 @@ use std::collections::HashMap;
 extern crate alloc;
 
 // Struct used to hold a reference to a key
-#[doc(hidden)]
-pub struct KeyRef<K> {
+struct KeyRef<K> {
     k: *const K,
 }
 
@@ -107,49 +105,40 @@ impl<K: PartialEq> PartialEq for KeyRef<K> {
 
 impl<K: Eq> Eq for KeyRef<K> {}
 
-#[cfg(feature = "nightly")]
-#[doc(hidden)]
-pub auto trait NotKeyRef {}
+// This type exists to allow a "blanket" Borrow impl for KeyRef without conflicting with the
+//  stdlib blanket impl
+#[repr(transparent)]
+struct KeyWrapper<K: ?Sized>(K);
 
-#[cfg(feature = "nightly")]
-impl<K> !NotKeyRef for KeyRef<K> {}
+impl<K: ?Sized> KeyWrapper<K> {
+    fn from_ref(key: &K) -> &Self {
+        // safety: KeyWrapper is transparent, so casting the ref like this is allowable
+        unsafe { &*(key as *const K as *const KeyWrapper<K>) }
+    }
+}
 
-#[cfg(feature = "nightly")]
-impl<K, D> Borrow<D> for KeyRef<K>
+impl<K: ?Sized + Hash> Hash for KeyWrapper<K> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.hash(state)
+    }
+}
+
+impl<K: ?Sized + PartialEq> PartialEq for KeyWrapper<K> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.eq(&other.0)
+    }
+}
+
+impl<K: ?Sized + Eq> Eq for KeyWrapper<K> {}
+
+impl<K, Q> Borrow<KeyWrapper<Q>> for KeyRef<K>
 where
-    K: Borrow<D>,
-    D: NotKeyRef + ?Sized,
+    K: Borrow<Q>,
+    Q: ?Sized,
 {
-    fn borrow(&self) -> &D {
-        unsafe { &*self.k }.borrow()
-    }
-}
-
-#[cfg(not(feature = "nightly"))]
-impl<K> Borrow<K> for KeyRef<K> {
-    fn borrow(&self) -> &K {
-        unsafe { &*self.k }
-    }
-}
-
-#[cfg(not(feature = "nightly"))]
-impl Borrow<str> for KeyRef<alloc::string::String> {
-    fn borrow(&self) -> &str {
-        unsafe { &*self.k }
-    }
-}
-
-#[cfg(not(feature = "nightly"))]
-impl<T: ?Sized> Borrow<T> for KeyRef<Box<T>> {
-    fn borrow(&self) -> &T {
-        unsafe { &*self.k }
-    }
-}
-
-#[cfg(not(feature = "nightly"))]
-impl<T> Borrow<[T]> for KeyRef<alloc::vec::Vec<T>> {
-    fn borrow(&self) -> &[T] {
-        unsafe { &*self.k }
+    fn borrow(&self) -> &KeyWrapper<Q> {
+        let key = unsafe { &*self.k }.borrow();
+        KeyWrapper::from_ref(key)
     }
 }
 
@@ -422,10 +411,10 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// ```
     pub fn get<'a, Q>(&'a mut self, k: &Q) -> Option<&'a V>
     where
-        KeyRef<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        if let Some(node) = self.map.get_mut(k) {
+        if let Some(node) = self.map.get_mut(KeyWrapper::from_ref(k)) {
             let node_ptr: *mut LruEntry<K, V> = node.as_ptr();
 
             self.detach(node_ptr);
@@ -458,10 +447,10 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// ```
     pub fn get_mut<'a, Q>(&'a mut self, k: &Q) -> Option<&'a mut V>
     where
-        KeyRef<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        if let Some(node) = self.map.get_mut(k) {
+        if let Some(node) = self.map.get_mut(KeyWrapper::from_ref(k)) {
             let node_ptr: *mut LruEntry<K, V> = node.as_ptr();
 
             self.detach(node_ptr);
@@ -584,11 +573,11 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// ```
     pub fn peek<'a, Q>(&'a self, k: &Q) -> Option<&'a V>
     where
-        KeyRef<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         self.map
-            .get(k)
+            .get(KeyWrapper::from_ref(k))
             .map(|node| unsafe { &*node.as_ref().val.as_ptr() })
     }
 
@@ -611,10 +600,10 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// ```
     pub fn peek_mut<'a, Q>(&'a mut self, k: &Q) -> Option<&'a mut V>
     where
-        KeyRef<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        match self.map.get_mut(k) {
+        match self.map.get_mut(KeyWrapper::from_ref(k)) {
             None => None,
             Some(node) => Some(unsafe { &mut *(*node.as_ptr()).val.as_mut_ptr() }),
         }
@@ -671,10 +660,10 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// ```
     pub fn contains<Q>(&self, k: &Q) -> bool
     where
-        KeyRef<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        self.map.contains_key(k)
+        self.map.contains_key(KeyWrapper::from_ref(k))
     }
 
     /// Removes and returns the value corresponding to the key from the cache or
@@ -696,10 +685,10 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// ```
     pub fn pop<Q>(&mut self, k: &Q) -> Option<V>
     where
-        KeyRef<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        match self.map.remove(k) {
+        match self.map.remove(KeyWrapper::from_ref(k)) {
             None => None,
             Some(old_node) => {
                 let mut old_node = unsafe {
@@ -738,10 +727,10 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// ```
     pub fn pop_entry<Q>(&mut self, k: &Q) -> Option<(K, V)>
     where
-        KeyRef<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        match self.map.remove(k) {
+        match self.map.remove(KeyWrapper::from_ref(k)) {
             None => None,
             Some(old_node) => {
                 let mut old_node = unsafe { *Box::from_raw(old_node.as_ptr()) };
@@ -806,10 +795,10 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// ```
     pub fn promote<'a, Q>(&'a mut self, k: &Q)
     where
-        KeyRef<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        if let Some(node) = self.map.get_mut(k) {
+        if let Some(node) = self.map.get_mut(KeyWrapper::from_ref(k)) {
             let node_ptr: *mut LruEntry<K, V> = node.as_ptr();
             self.detach(node_ptr);
             self.attach(node_ptr);
@@ -842,10 +831,10 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// ```
     pub fn demote<'a, Q>(&'a mut self, k: &Q)
     where
-        KeyRef<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        if let Some(node) = self.map.get_mut(k) {
+        if let Some(node) = self.map.get_mut(KeyWrapper::from_ref(k)) {
             let node_ptr: *mut LruEntry<K, V> = node.as_ptr();
             self.detach(node_ptr);
             self.attach_last(node_ptr);
