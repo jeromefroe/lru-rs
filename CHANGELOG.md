@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## [v0.10.0](https://github.com/jeromefroe/lru-rs/tree/0.10.0) - 2023-03-04
+
+- Remove `KeyRef` from the public API.
 
 ## [v0.9.0](https://github.com/jeromefroe/lru-rs/tree/0.9.0) - 2022-12-31
 
