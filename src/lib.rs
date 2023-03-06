@@ -181,9 +181,8 @@ pub struct LruCache<K, V, S = DefaultHasher> {
     map: HashMap<KeyRef<K>, NonNull<LruEntry<K, V>>, S>,
     cap: NonZeroUsize,
 
-    // head and tail are sigil nodes to facilitate inserting entries
-    head: *mut LruEntry<K, V>,
-    tail: *mut LruEntry<K, V>,
+    // root is a sigil node to facilitate inserting entries
+    root: *mut LruEntry<K, V>,
 }
 
 impl<K: Hash + Eq, V> LruCache<K, V> {
@@ -262,13 +261,12 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         let cache = LruCache {
             map,
             cap,
-            head: Box::into_raw(Box::new(LruEntry::new_sigil())),
-            tail: Box::into_raw(Box::new(LruEntry::new_sigil())),
+            root: Box::into_raw(Box::new(LruEntry::new_sigil())),
         };
 
         unsafe {
-            (*cache.head).next = cache.tail;
-            (*cache.tail).prev = cache.head;
+            (*cache.root).next = cache.root;
+            (*cache.root).prev = cache.root;
         }
 
         cache
@@ -365,7 +363,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         if self.len() == self.cap().get() {
             // if the cache is full, remove the last entry so we can use it for the new key
             let old_key = KeyRef {
-                k: unsafe { &(*(*(*self.tail).prev).key.as_ptr()) },
+                k: unsafe { &(*(*(*self.root).prev).key.as_ptr()) },
             };
             let old_node = self.map.remove(&old_key).unwrap();
             let node_ptr: *mut LruEntry<K, V> = old_node.as_ptr();
@@ -632,7 +630,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
 
         let (key, val);
         unsafe {
-            let node = (*self.tail).prev;
+            let node = (*self.root).prev;
             key = &(*(*node).key.as_ptr()) as &K;
             val = &(*(*node).val.as_ptr()) as &V;
         }
@@ -975,8 +973,8 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     pub fn iter(&self) -> Iter<'_, K, V> {
         Iter {
             len: self.len(),
-            ptr: unsafe { (*self.head).next },
-            end: unsafe { (*self.tail).prev },
+            ptr: unsafe { (*self.root).next },
+            end: unsafe { (*self.root).prev },
             phantom: PhantomData,
         }
     }
@@ -1011,18 +1009,18 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     pub fn iter_mut(&mut self) -> IterMut<'_, K, V> {
         IterMut {
             len: self.len(),
-            ptr: unsafe { (*self.head).next },
-            end: unsafe { (*self.tail).prev },
+            ptr: unsafe { (*self.root).next },
+            end: unsafe { (*self.root).prev },
             phantom: PhantomData,
         }
     }
 
     fn remove_last(&mut self) -> Option<Box<LruEntry<K, V>>> {
         let prev;
-        unsafe { prev = (*self.tail).prev }
-        if prev != self.head {
+        unsafe { prev = (*self.root).prev }
+        if prev != self.root {
             let old_key = KeyRef {
-                k: unsafe { &(*(*(*self.tail).prev).key.as_ptr()) },
+                k: unsafe { &(*(*(*self.root).prev).key.as_ptr()) },
             };
             let old_node = self.map.remove(&old_key).unwrap();
             let node_ptr: *mut LruEntry<K, V> = old_node.as_ptr();
@@ -1043,9 +1041,9 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     // Attaches `node` after the sigil `self.head` node.
     fn attach(&mut self, node: *mut LruEntry<K, V>) {
         unsafe {
-            (*node).next = (*self.head).next;
-            (*node).prev = self.head;
-            (*self.head).next = node;
+            (*node).next = (*self.root).next;
+            (*node).prev = self.root;
+            (*self.root).next = node;
             (*(*node).next).prev = node;
         }
     }
@@ -1053,9 +1051,9 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     // Attaches `node` before the sigil `self.tail` node.
     fn attach_last(&mut self, node: *mut LruEntry<K, V>) {
         unsafe {
-            (*node).next = self.tail;
-            (*node).prev = (*self.tail).prev;
-            (*self.tail).prev = node;
+            (*node).next = self.root;
+            (*node).prev = (*self.root).prev;
+            (*self.root).prev = node;
             (*(*node).prev).next = node;
         }
     }
@@ -1071,8 +1069,7 @@ impl<K, V, S> Drop for LruCache<K, V, S> {
         // We rebox the head/tail, and because these are maybe-uninit
         // they do not have the absent k/v dropped.
 
-        let _head = unsafe { *Box::from_raw(self.head) };
-        let _tail = unsafe { *Box::from_raw(self.tail) };
+        let _ = unsafe { *Box::from_raw(self.root) };
     }
 }
 
