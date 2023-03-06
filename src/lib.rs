@@ -412,16 +412,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        if let Some(node) = self.map.get_mut(KeyWrapper::from_ref(k)) {
-            let node_ptr: *mut LruEntry<K, V> = node.as_ptr();
-
-            self.detach(node_ptr);
-            self.attach(node_ptr);
-
-            Some(unsafe { &*(*node_ptr).val.as_ptr() })
-        } else {
-            None
-        }
+        Some(self.get_mut(k)?)
     }
 
     /// Returns a mutable reference to the value of the key in the cache or `None` if it
@@ -486,24 +477,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     where
         F: FnOnce() -> V,
     {
-        if let Some(node) = self.map.get_mut(&KeyRef { k: &k }) {
-            let node_ptr: *mut LruEntry<K, V> = node.as_ptr();
-
-            self.detach(node_ptr);
-            self.attach(node_ptr);
-
-            unsafe { &*(*node_ptr).val.as_ptr() }
-        } else {
-            let v = f();
-            let (_, node) = self.replace_or_create_node(k, v);
-            let node_ptr: *mut LruEntry<K, V> = node.as_ptr();
-
-            self.attach(node_ptr);
-
-            let keyref = unsafe { (*node_ptr).key.as_ptr() };
-            self.map.insert(KeyRef { k: keyref }, node);
-            unsafe { &*(*node_ptr).val.as_ptr() }
-        }
+        self.get_or_insert_mut(k, f)
     }
 
     /// Returns a mutable reference to the value of the key in the cache if it is
@@ -686,22 +660,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        match self.map.remove(KeyWrapper::from_ref(k)) {
-            None => None,
-            Some(old_node) => {
-                let mut old_node = unsafe {
-                    let mut old_node = *Box::from_raw(old_node.as_ptr());
-                    ptr::drop_in_place(old_node.key.as_mut_ptr());
-
-                    old_node
-                };
-
-                self.detach(&mut old_node);
-
-                let LruEntry { key: _, val, .. } = old_node;
-                unsafe { Some(val.assume_init()) }
-            }
-        }
+        Some(self.pop_entry(k)?.1)
     }
 
     /// Removes and returns the key and the value corresponding to the key from the cache or
@@ -762,11 +721,11 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// assert_eq!(cache.len(), 0);
     /// ```
     pub fn pop_lru(&mut self) -> Option<(K, V)> {
-        let node = self.remove_last()?;
-        // N.B.: Can't destructure directly because of https://github.com/rust-lang/rust/issues/28536
-        let node = *node;
-        let LruEntry { key, val, .. } = node;
-        unsafe { Some((key.assume_init(), val.assume_init())) }
+        if self.is_empty() {
+            return None;
+        }
+        let key = unsafe { &*(*(*self.root).prev).key.as_ptr() };
+        self.pop_entry(key)
     }
 
     /// Marks the key as the most recently used one.
@@ -1012,22 +971,6 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             ptr: unsafe { (*self.root).next },
             end: unsafe { (*self.root).prev },
             phantom: PhantomData,
-        }
-    }
-
-    fn remove_last(&mut self) -> Option<Box<LruEntry<K, V>>> {
-        let prev;
-        unsafe { prev = (*self.root).prev }
-        if prev != self.root {
-            let old_key = KeyRef {
-                k: unsafe { &(*(*(*self.root).prev).key.as_ptr()) },
-            };
-            let old_node = self.map.remove(&old_key).unwrap();
-            let node_ptr: *mut LruEntry<K, V> = old_node.as_ptr();
-            self.detach(node_ptr);
-            unsafe { Some(Box::from_raw(node_ptr)) }
-        } else {
-            None
         }
     }
 
