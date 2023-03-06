@@ -67,14 +67,17 @@ extern crate scoped_threadpool;
 use alloc::borrow::Borrow;
 use alloc::boxed::Box;
 use core::fmt;
+use core::fmt::{Debug, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::iter::FusedIterator;
 use core::marker::PhantomData;
-use core::mem;
+use core::mem::{self, replace};
 use core::ptr::{self, NonNull};
 use core::usize;
+#[cfg(not(feature = "no_std"))]
+use std::borrow::ToOwned;
 
-#[cfg(any(test, not(feature = "hashbrown")))]
+#[cfg(any(test, not(feature = "no_std")))]
 extern crate std;
 
 #[cfg(feature = "hashbrown")]
@@ -177,6 +180,865 @@ where
     }
 }
 
+/// A trait for implementing "keys" into an LruCache entry. Used to customize how to get a ref for
+/// lookup. Note that implementing this trait only allows entry lookup. To support insertion as
+/// well, see `InsertionKey`.
+//noinspection RsSelfConvention
+pub trait Key {
+    /// Type of the ref used for lookup.
+    type Key: ?Sized + Hash + Eq;
+
+    /// Gets this key as a ref.
+    fn as_ref(this: &Self) -> &Self::Key;
+}
+
+/// A trait for implementing keys which support insertion (by conversion into the "real" key type).
+//noinspection RsSelfConvention
+pub trait InsertionKey<K>: Key {
+    /// Converts this key into the "real" key type.
+    fn into_owned(this: Self) -> K;
+}
+
+/// A wrapper for entry lookup via owned key. Allows efficient insertion without cloning.
+#[derive(Hash, Eq, PartialEq)]
+pub struct OwnedKey<K>(pub K);
+
+impl<K: Hash + Eq> Key for OwnedKey<K> {
+    type Key = K;
+
+    fn as_ref(this: &Self) -> &Self::Key {
+        &this.0
+    }
+}
+
+impl<K: Hash + Eq> InsertionKey<K> for OwnedKey<K> {
+    fn into_owned(this: Self) -> K {
+        this.0
+    }
+}
+
+impl<K: Debug> Debug for OwnedKey<K> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+/// A wrapper for entry lookup via borrowed ref. Allows efficient lookup without cloning.
+#[derive(Hash, Eq, PartialEq)]
+pub struct BorrowedKey<'a, Q: ?Sized>(pub &'a Q);
+
+impl<'a, Q: ?Sized + Hash + Eq> Key for BorrowedKey<'a, Q> {
+    type Key = Q;
+
+    fn as_ref(this: &Self) -> &Self::Key {
+        this.0
+    }
+}
+
+#[cfg(not(feature = "no_std"))]
+impl<'a, K: Borrow<Q>, Q: ?Sized + Hash + Eq + ToOwned<Owned = K>> InsertionKey<K>
+    for BorrowedKey<'a, Q>
+{
+    fn into_owned(this: Self) -> Q::Owned {
+        this.0.to_owned()
+    }
+}
+
+impl<'a, Q: ?Sized + Debug> Debug for BorrowedKey<'a, Q> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+// Used to store either the OccupiedEntry's creation key or the evicted entry, since these two
+//  cannot coexist
+enum OccupiedExtra<K, V, Q> {
+    Key(Option<Q>),
+    Evicted(Option<(K, V)>),
+}
+
+/// A view into an occupied entry in an `LruCache`. It is part of the `Entry` enum.
+pub struct OccupiedEntry<'a, K, V, Q = OwnedKey<K>, S = DefaultHasher> {
+    cache: &'a mut LruCache<K, V, S>,
+    node: NonNull<LruEntry<K, V>>,
+    extra: OccupiedExtra<K, V, Q>,
+}
+
+impl<'a, K, V, Q, S> OccupiedEntry<'a, K, V, Q, S> {
+    /// Gets a reference to the key in the entry.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// cache.entry(1).or_insert("a");
+    /// assert_eq!(cache.entry(1).key(), &1);
+    /// ```
+    pub fn key(&self) -> &K {
+        unsafe { self.node.as_ref().key.assume_init_ref() }
+    }
+
+    fn key_mut(&mut self) -> &mut K {
+        unsafe { self.node.as_mut().key.assume_init_mut() }
+    }
+
+    /// Gets a reference to the value in the entry. Unlike `get` does not update the LRU list so the
+    /// key's position will be unchanged.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::{Entry, LruCache};
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// cache.entry(1).or_insert("a");
+    /// if let Entry::Occupied(entry) = cache.entry(1) {
+    ///     assert_eq!(entry.peek(), &"a");
+    /// }
+    /// ```
+    pub fn peek(&self) -> &V {
+        unsafe { self.node.as_ref().val.assume_init_ref() }
+    }
+
+    /// Gets a mutable reference to the value in the entry. Unlike `get_mut` does not update the LRU
+    /// list so the key's position will be unchanged.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::{Entry, LruCache};
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// cache.entry("a").or_insert(1);
+    /// if let Entry::Occupied(mut entry) = cache.entry("a") {
+    ///     assert_eq!(entry.peek(), &1);
+    ///     *entry.peek_mut() *= 2;
+    ///     assert_eq!(entry.peek(), &2);
+    /// }
+    /// ```
+    pub fn peek_mut(&mut self) -> &mut V {
+        unsafe { self.node.as_mut().val.assume_init_mut() }
+    }
+
+    /// Converts the `OccupiedEntry` into a mutable reference to the value in the entry with a
+    /// lifetime bound to the map itself. Unlike `into_mut` does not update the LRU list so the
+    /// key's position will be unchanged.
+    ///
+    /// If you need multiple references to the `OccupiedEntry`, see `peek_mut`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::{Entry, LruCache};
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// cache.entry("a").or_insert(1);
+    /// if let Entry::Occupied(mut entry) = cache.entry("a") {
+    ///     *entry.into_peek() *= 2;
+    /// }
+    /// assert_eq!(cache.get(&"a"), Some(&2));
+    /// ```
+    pub fn into_peek(mut self) -> &'a mut V {
+        unsafe { self.node.as_mut().val.assume_init_mut() }
+    }
+}
+
+impl<'a, K: Hash + Eq, V, Q, S: BuildHasher> OccupiedEntry<'a, K, V, Q, S> {
+    /// Gets a reference to the value in the entry.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::{Entry, LruCache};
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// cache.entry(1).or_insert("a");
+    /// if let Entry::Occupied(mut entry) = cache.entry(1) {
+    ///     assert_eq!(entry.get(), &"a");
+    /// }
+    /// ```
+    pub fn get(&mut self) -> &V {
+        self.promote();
+        self.peek()
+    }
+
+    /// Gets a mutable reference to the value in the entry.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::{Entry, LruCache};
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// cache.entry("a").or_insert(1);
+    /// if let Entry::Occupied(mut entry) = cache.entry("a") {
+    ///     assert_eq!(entry.get(), &1);
+    ///     *entry.get_mut() *= 2;
+    ///     assert_eq!(entry.get(), &2);
+    /// }
+    /// ```
+    pub fn get_mut(&mut self) -> &mut V {
+        self.promote();
+        self.peek_mut()
+    }
+
+    /// Converts the `OccupiedEntry` into a mutable reference to the value in the entry with a
+    /// lifetime bound to the map itself.
+    ///
+    /// If you need multiple references to the `OccupiedEntry`, see `get_mut`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::{Entry, LruCache};
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// cache.entry("a").or_insert(1);
+    /// if let Entry::Occupied(mut entry) = cache.entry("a") {
+    ///     *entry.into_mut() *= 2;
+    /// }
+    /// assert_eq!(cache.get(&"a"), Some(&2));
+    /// ```
+    pub fn into_mut(mut self) -> &'a mut V {
+        self.promote();
+        self.into_peek()
+    }
+
+    /// Marks this entry's key as the most recently used one.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::{Entry, LruCache};
+    /// let mut cache = LruCache::new(3);
+    ///
+    /// cache.put(1, "a");
+    /// cache.put(2, "b");
+    /// cache.put(3, "c");
+    /// cache.get(&1);
+    /// cache.get(&2);
+    ///
+    /// // If we do `pop_lru` now, we would pop 3.
+    /// // assert_eq!(cache.pop_lru(), Some((3, "c")));
+    ///
+    /// // By promoting 3, we make sure it isn't popped.
+    /// if let Entry::Occupied(mut entry) = cache.entry(3) {
+    ///     entry.promote();
+    /// }
+    /// assert_eq!(cache.pop_lru(), Some((1, "a")));
+    /// ```
+    pub fn promote(&mut self) {
+        self.cache.detach(self.node.as_ptr());
+        self.cache.attach(self.node.as_ptr());
+    }
+
+    /// Marks this entry's key as the least recently used one.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::{Entry, LruCache};
+    /// let mut cache = LruCache::new(3);
+    ///
+    /// cache.put(1, "a");
+    /// cache.put(2, "b");
+    /// cache.put(3, "c");
+    /// cache.get(&1);
+    /// cache.get(&2);
+    ///
+    /// // If we do `pop_lru` now, we would pop 3.
+    /// // assert_eq!(cache.pop_lru(), Some((3, "c")));
+    ///
+    /// // By demoting 1 and 2, we make sure those are popped first.
+    /// if let Entry::Occupied(mut entry) = cache.entry(2) {
+    ///     entry.demote();
+    /// }
+    /// if let Entry::Occupied(mut entry) = cache.entry(1) {
+    ///     entry.demote();
+    /// }
+    /// assert_eq!(cache.pop_lru(), Some((1, "a")));
+    /// assert_eq!(cache.pop_lru(), Some((2, "b")));
+    /// ```
+    pub fn demote(&mut self) {
+        self.cache.detach(self.node.as_ptr());
+        self.cache.attach_last(self.node.as_ptr());
+    }
+
+    fn replace_node(mut self, node: NonNull<LruEntry<K, V>>) -> Result<Self, Self> {
+        let root = unsafe { self.cache.root.unwrap_unchecked() };
+        if node == root {
+            Err(self)
+        } else {
+            self.node = node;
+            // invalidate any key/evictions
+            self.extra = OccupiedExtra::Key(None);
+            Ok(self)
+        }
+    }
+
+    /// Gets the next (less recently used) entry in the cache.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::{Entry, LruCache};
+    /// let mut cache = LruCache::new(3);
+    ///
+    /// cache.put(1, "a");
+    /// cache.put(2, "b");
+    /// cache.put(3, "c");
+    ///
+    /// if let Entry::Occupied(entry) = cache.entry(2) {
+    ///     let entry = entry.next().unwrap();
+    ///     assert_eq!(entry.key(), &1);
+    /// }
+    /// ```
+    pub fn next(self) -> Result<Self, Self> {
+        let node = unsafe { NonNull::new_unchecked(self.node.as_ref().next) };
+        self.replace_node(node)
+    }
+
+    /// Gets the previous (more recently used) entry in the cache.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::{Entry, LruCache};
+    /// let mut cache = LruCache::new(3);
+    ///
+    /// cache.put(1, "a");
+    /// cache.put(2, "b");
+    /// cache.put(3, "c");
+    ///
+    /// if let Entry::Occupied(entry) = cache.entry(2) {
+    ///     let entry = entry.prev().unwrap();
+    ///     assert_eq!(entry.key(), &3);
+    /// }
+    /// ```
+    pub fn prev(self) -> Result<Self, Self> {
+        let node = unsafe { NonNull::new_unchecked(self.node.as_ref().prev) };
+        self.replace_node(node)
+    }
+
+    /// Sets the value of the entry, and returns the entry’s old value.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::{Entry, LruCache};
+    /// let mut cache = LruCache::new(3);
+    ///
+    /// cache.put(1, "a");
+    ///
+    /// if let Entry::Occupied(mut entry) = cache.entry(1) {
+    ///     assert_eq!(entry.insert("b"), "a");
+    ///     assert_eq!(entry.get(), &"b");
+    /// }
+    /// ```
+    pub fn insert(&mut self, value: V) -> V {
+        replace(self.get_mut(), value)
+    }
+
+    /// Takes the value out of the entry, and returns it.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::{Entry, LruCache};
+    /// let mut cache = LruCache::new(3);
+    ///
+    /// cache.put(1, "a");
+    ///
+    /// if let Entry::Occupied(mut entry) = cache.entry(1) {
+    ///     assert_eq!(entry.remove(), "a");
+    /// }
+    /// assert!(!cache.contains(&1));
+    /// ```
+    pub fn remove(self) -> V {
+        self.remove_entry().1
+    }
+
+    fn remove_node(mut self) -> NonNull<LruEntry<K, V>> {
+        let key = unsafe { self.node.as_ref().key.assume_init_ref() };
+        // note: we can't use self.key() here because the compiler doesn't know that it doesn't
+        //  overlap with self.cache
+        let removed = self.cache.map.remove(KeyWrapper::from_ref(key));
+        debug_assert!(removed);
+        self.cache.detach(self.node.as_ptr());
+        // prevent automatic evictions by setting the extra to Key
+        self.extra = OccupiedExtra::Key(None);
+        self.node
+    }
+
+    /// Takes the key and value out of the entry, and returns them.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::{Entry, LruCache};
+    /// let mut cache = LruCache::new(3);
+    ///
+    /// cache.put(1, "a");
+    ///
+    /// if let Entry::Occupied(mut entry) = cache.entry(1) {
+    ///     assert_eq!(entry.remove_entry(), (1, "a"));
+    /// }
+    /// assert!(!cache.contains(&1));
+    /// ```
+    pub fn remove_entry(self) -> (K, V) {
+        let node = self.remove_node();
+        let LruEntry { key, val, .. } = unsafe { *Box::from_raw(node.as_ptr()) };
+        let key = unsafe { key.assume_init() };
+        let value = unsafe { val.assume_init() };
+        (key, value)
+    }
+
+    /// Takes the entry evicted by this entry's insertion, if any. A return value of `None` means
+    /// that this entry was not created by insertion, did not evict another entry, or was already
+    /// taken.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::{Entry, LruCache};
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// cache.put(1, "a");
+    /// cache.put(2, "b");
+    ///
+    /// let mut entry = cache.entry(3).insert("c");
+    /// assert_eq!(entry.take_evicted(), Some((1, "a")));
+    /// ```
+    pub fn take_evicted(&mut self) -> Option<(K, V)> {
+        match &mut self.extra {
+            OccupiedExtra::Key(_) => None,
+            OccupiedExtra::Evicted(evicted) => evicted.take(),
+        }
+    }
+}
+
+impl<'a, K: Hash + Eq, V, Q: InsertionKey<K>, S: BuildHasher> OccupiedEntry<'a, K, V, Q, S> {
+    /// Replaces the key in the hash map with the key used to create this entry. Panics if the
+    /// key was already consumed by insertion.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::rc::Rc;
+    /// use lru::{Entry, LruCache};
+    /// let mut cache = LruCache::new(3);
+    ///
+    /// let str1 = Rc::new("abc".to_string());
+    /// let str2 = Rc::new("abc".to_string());
+    ///
+    /// cache.put(str1.clone(), 1);
+    ///
+    /// assert_eq!(Rc::strong_count(&str1), 2);
+    /// assert_eq!(Rc::strong_count(&str2), 1);
+    /// if let Entry::Occupied(mut entry) = cache.entry(str2.clone()) {
+    ///     entry.replace_key();
+    ///     assert_eq!(Rc::strong_count(&str1), 1);
+    ///     assert_eq!(Rc::strong_count(&str2), 2);
+    /// }
+    /// ```
+    pub fn replace_key(mut self) -> K {
+        let key = match &mut self.extra {
+            OccupiedExtra::Key(key) => key.take(),
+            OccupiedExtra::Evicted(_) => None,
+        };
+        let key = key.expect("Key was already consumed by insertion");
+        replace(self.key_mut(), Q::into_owned(key))
+    }
+
+    /// Replaces the entry, returning the old key and value. The new key in the hash map will be
+    /// the key used to create this entry. Panics if the key was already consumed by insertion.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::rc::Rc;
+    /// use lru::{Entry, LruCache};
+    /// let mut cache = LruCache::new(3);
+    ///
+    /// let str1 = Rc::new("abc".to_string());
+    /// let str2 = Rc::new("abc".to_string());
+    ///
+    /// cache.put(str1.clone(), 1);
+    ///
+    /// assert_eq!(Rc::strong_count(&str1), 2);
+    /// assert_eq!(Rc::strong_count(&str2), 1);
+    /// if let Entry::Occupied(mut entry) = cache.entry(str2.clone()) {
+    ///     entry.replace_entry(5);
+    ///     assert_eq!(Rc::strong_count(&str1), 1);
+    ///     assert_eq!(Rc::strong_count(&str2), 2);
+    /// }
+    /// assert_eq!(cache.get(&str1), Some(&5));
+    /// ```
+    pub fn replace_entry(mut self, value: V) -> (K, V) {
+        let value = self.insert(value);
+        let key = self.replace_key();
+        (key, value)
+    }
+}
+
+impl<'a, K: Debug, V: Debug, Q, S> Debug for OccupiedEntry<'a, K, V, Q, S> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OccupiedEntry")
+            .field("key", self.key())
+            .field("value", self.peek())
+            .finish()
+    }
+}
+
+/// A view into a vacant entry in an `LruCache`. It is part of the `Entry` enum.
+pub struct VacantEntry<'a, K, V, Q = OwnedKey<K>, S = DefaultHasher> {
+    cache: &'a mut LruCache<K, V, S>,
+    key: Q,
+}
+
+impl<'a, K, V, Q: Key, S> VacantEntry<'a, K, V, Q, S> {
+    /// Gets a reference to the key that would be used when inserting a value through the
+    /// VacantEntry.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::<u8, u8>::new(2);
+    ///
+    /// assert_eq!(cache.entry(1).key(), &1);
+    /// ```
+    pub fn key(&self) -> &Q::Key {
+        Q::as_ref(&self.key)
+    }
+
+    /// Take ownership of the key.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::{LruCache, Entry, OwnedKey};
+    /// let mut cache = LruCache::<u8, u8>::new(2);
+    ///
+    /// if let Entry::Vacant(entry) = cache.entry(1) {
+    ///     assert_eq!(entry.into_key(), OwnedKey(1));
+    /// }
+    /// ```
+    pub fn into_key(self) -> Q {
+        self.key
+    }
+}
+
+impl<'a, K: Hash + Eq, V, Q: InsertionKey<K>, S: BuildHasher> VacantEntry<'a, K, V, Q, S> {
+    /// Sets the value of the entry with the `VacantEntry`’s key, and returns a mutable reference to
+    /// it.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::{LruCache, Entry};
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// if let Entry::Vacant(entry) = cache.entry(1) {
+    ///     entry.insert("a");
+    /// }
+    /// assert_eq!(cache.get(&1), Some(&"a"));
+    /// ```
+    pub fn insert(self, value: V) -> &'a mut V {
+        self.insert_entry(value).into_mut()
+    }
+
+    /// Sets the value of the entry with the `VacantEntry`’s key, and returns an `OccupiedEntry`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::{LruCache, Entry};
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// if let Entry::Vacant(entry) = cache.entry(1) {
+    ///     entry.insert_entry("a");
+    /// }
+    /// assert_eq!(cache.get(&1), Some(&"a"));
+    /// ```
+    pub fn insert_entry(self, value: V) -> OccupiedEntry<'a, K, V, Q, S> {
+        self.try_insert_entry(value)
+            .unwrap_or_else(|_| panic!("Cache has zero capacity"))
+    }
+
+    /// Trys to set the value of the entry with the `VacantEntry`’s key, and returns a mutable
+    /// reference to it. If insertion fails because the cache has zero capacity, returns the entry
+    /// which could not be inserted as an Err.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::{LruCache, Entry};
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// if let Entry::Vacant(entry) = cache.entry(1) {
+    ///     let res = entry.try_insert("a");
+    ///     assert!(res.is_ok());
+    /// }
+    /// assert_eq!(cache.get(&1), Some(&"a"));
+    ///
+    /// cache.resize(0);
+    ///
+    /// if let Entry::Vacant(entry) = cache.entry(2) {
+    ///     let res = entry.try_insert("b");
+    ///     assert_eq!(res, Err((2, "b")));
+    /// }
+    /// ```
+    pub fn try_insert(self, value: V) -> Result<&'a mut V, (K, V)> {
+        Ok(self.try_insert_entry(value)?.into_mut())
+    }
+
+    /// Trys to set the value of the entry with the `VacantEntry`’s key, and returns an
+    /// `OccupiedEntry`. If insertion fails because the cache has zero capacity, returns the entry
+    /// which could not be inserted as an Err.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::{LruCache, Entry};
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// if let Entry::Vacant(entry) = cache.entry(3) {
+    ///     let res = entry.try_insert_entry("c");
+    ///     assert!(res.is_ok());
+    /// }
+    /// assert_eq!(cache.get(&3), Some(&"c"));
+    ///
+    /// cache.resize(0);
+    ///
+    /// if let Entry::Vacant(entry) = cache.entry(4) {
+    ///     let res = entry.try_insert_entry("d");
+    ///     assert_eq!(res.unwrap_err(), (4, "d"));
+    /// }
+    /// ```
+    pub fn try_insert_entry(self, value: V) -> Result<OccupiedEntry<'a, K, V, Q, S>, (K, V)> {
+        let key = Q::into_owned(self.key);
+        let (node, evicted) = {
+            if self.cache.len() == self.cache.cap() {
+                if self.cache.cap() == 0 {
+                    return Err((key, value));
+                }
+                // if the cache is full, remove the last entry so we can use it for the new key
+                let entry = unsafe { self.cache.entry_lru().unwrap_unchecked() };
+                let mut node = entry.remove_node();
+                let key = replace(unsafe { node.as_mut().key.assume_init_mut() }, key);
+                let value = replace(unsafe { node.as_mut().val.assume_init_mut() }, value);
+                let evicted = Some((key, value));
+                (node, evicted)
+            } else {
+                let node = unsafe {
+                    NonNull::new_unchecked(Box::into_raw(Box::new(LruEntry::new(key, value))))
+                };
+                if self.cache.len() == 0 {
+                    self.cache.alloc_root();
+                }
+                (node, None)
+            }
+        };
+        self.cache.attach(node.as_ptr());
+        self.cache.map.insert(EntryWrapper(node));
+        Ok(OccupiedEntry {
+            cache: self.cache,
+            node,
+            extra: OccupiedExtra::Evicted(evicted),
+        })
+    }
+}
+
+impl<'a, K, V, Q: Key, S> Debug for VacantEntry<'a, K, V, Q, S>
+where
+    Q::Key: Debug,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("VacantEntry")
+            .field("key", &self.key())
+            .finish()
+    }
+}
+
+/// A view into a single entry in a map, which may either be vacant or occupied.
+///
+/// This `enum` is constructed from the `LruCache::entry`/`LruCache::entry_ref` methods on
+/// `LruCache`.
+pub enum Entry<'a, K, V, Q = OwnedKey<K>, S = DefaultHasher> {
+    /// An occupied entry.
+    Occupied(OccupiedEntry<'a, K, V, Q, S>),
+    /// A vacant entry.
+    Vacant(VacantEntry<'a, K, V, Q, S>),
+}
+
+impl<'a, K: Borrow<Q::Key>, V, Q: Key, S> Entry<'a, K, V, Q, S> {
+    /// Returns a reference to this entry's key.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::<u8, u8>::new(2);
+    ///
+    /// assert_eq!(cache.entry(1).key(), &1);
+    /// ```
+    pub fn key(&self) -> &Q::Key {
+        match self {
+            Entry::Occupied(entry) => entry.key().borrow(),
+            Entry::Vacant(entry) => entry.key(),
+        }
+    }
+}
+
+impl<'a, K: Hash + Eq, V, Q: InsertionKey<K>, S: BuildHasher> Entry<'a, K, V, Q, S> {
+    /// Sets the value of the entry, and returns an `OccupiedEntry`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// let entry = cache.entry(1).insert("a");
+    /// assert_eq!(entry.key(), &1);
+    /// entry.remove();
+    /// assert!(cache.is_empty());
+    /// ```
+    pub fn insert(self, value: V) -> OccupiedEntry<'a, K, V, Q, S> {
+        match self {
+            Entry::Occupied(mut entry) => {
+                entry.insert(value);
+                entry
+            }
+            Entry::Vacant(entry) => entry.insert_entry(value),
+        }
+    }
+
+    /// Ensures a value is in the entry by inserting the default if empty, and returns a mutable
+    /// reference to the value in the entry.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// cache.entry("a").or_insert(1);
+    /// assert_eq!(cache.get(&"a"), Some(&1));
+    ///
+    /// *cache.entry("a").or_insert(10) *= 2;
+    /// assert_eq!(cache.get(&"a"), Some(&2));
+    /// ```
+    pub fn or_insert(self, default: V) -> &'a mut V {
+        self.or_insert_with(move || default)
+    }
+
+    /// Ensures a value is in the entry by inserting the result of the default function if empty,
+    /// and returns a mutable reference to the value in the entry.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// cache.entry("a").or_insert_with(|| 1);
+    /// assert_eq!(cache.get(&"a"), Some(&1));
+    /// ```
+    pub fn or_insert_with(self, default: impl FnOnce() -> V) -> &'a mut V {
+        self.or_insert_with_key(move |_| default())
+    }
+
+    /// Ensures a value is in the entry by inserting, if empty, the result of the default function.
+    /// This method allows for generating key-derived values for insertion by providing the default
+    /// function a reference to the key that was moved during the .entry(key) method call.
+    ///
+    /// The reference to the moved/to_owned key is provided so that cloning or copying the key is
+    /// unnecessary, unlike with `Entry::or_insert_with`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// cache.entry("abc").or_insert_with_key(|key| key.len());
+    /// assert_eq!(cache.get(&"abc"), Some(&3));
+    /// ```
+    pub fn or_insert_with_key(self, default: impl FnOnce(&K) -> V) -> &'a mut V {
+        match self {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                let entry = VacantEntry {
+                    cache: entry.cache,
+                    key: OwnedKey(Q::into_owned(entry.key)),
+                };
+                let value = default(entry.key());
+                entry.insert(value)
+            }
+        }
+    }
+
+    /// Provides in-place mutable access to an occupied entry before any potential inserts into the
+    /// map.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// cache.entry("a")
+    ///     .and_modify(|x| *x += 1)
+    ///     .or_insert(1);
+    /// assert_eq!(cache.get(&"a"), Some(&1));
+    ///
+    /// cache.entry("a")
+    ///     .and_modify(|x| *x += 1)
+    ///     .or_insert(1);
+    /// assert_eq!(cache.get(&"a"), Some(&2));
+    /// ```
+    pub fn and_modify(mut self, f: impl FnOnce(&mut V)) -> Self {
+        if let Entry::Occupied(entry) = &mut self {
+            f(entry.get_mut());
+        }
+        self
+    }
+}
+
+impl<'a, K: Hash + Eq, V: Default, Q: InsertionKey<K>, S: BuildHasher> Entry<'a, K, V, Q, S> {
+    /// Ensures a value is in the entry by inserting the default value if empty, and returns a
+    /// mutable reference to the value in the entry.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// cache.entry("a").or_default();
+    /// assert_eq!(cache.get(&"a"), Some(&0));
+    /// ```
+    pub fn or_default(self) -> &'a mut V {
+        self.or_insert_with(V::default)
+    }
+}
+
+impl<'a, K: Debug, V: Debug, Q: Key, S> Debug for Entry<'a, K, V, Q, S>
+where
+    Q::Key: Debug,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Entry::Occupied(entry) => f.debug_tuple("Entry").field(entry).finish(),
+            Entry::Vacant(entry) => f.debug_tuple("Entry").field(entry).finish(),
+        }
+    }
+}
+
 /// An LRU Cache
 pub struct LruCache<K, V, S = DefaultHasher> {
     map: HashSet<EntryWrapper<K, V>, S>,
@@ -252,6 +1114,96 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         }
     }
 
+    /// Gets the given key’s corresponding entry in the map for in-place manipulation.
+    ///
+    /// # Example
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// cache.entry(1).or_insert("a");
+    /// cache.entry(2).or_default();
+    ///
+    /// assert_eq!(cache.get(&1), Some(&"a"));
+    /// assert_eq!(cache.get(&2), Some(&""))
+    /// ```
+    pub fn entry(&mut self, k: K) -> Entry<K, V, OwnedKey<K>, S> {
+        self.entry_for(OwnedKey(k))
+    }
+
+    /// Gets the given key’s corresponding entry by reference in the map for in-place manipulation.
+    ///
+    /// # Example
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// cache.entry_ref(&1).or_insert("a");
+    /// cache.entry_ref(&2).or_default();
+    ///
+    /// assert_eq!(cache.get(&1), Some(&"a"));
+    /// assert_eq!(cache.get(&2), Some(&""))
+    /// ```
+    pub fn entry_ref<'a, 'b, Q: ?Sized + Hash + Eq>(
+        &'a mut self,
+        k: &'b Q,
+    ) -> Entry<'a, K, V, BorrowedKey<'b, Q>, S>
+    where
+        K: Borrow<Q>,
+    {
+        self.entry_for(BorrowedKey(k))
+    }
+
+    /// Gets the entry for the LRU in the map for in-place manipulation.
+    ///
+    /// # Example
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// cache.entry_ref(&1).or_insert("a");
+    /// cache.entry_ref(&2).or_default();
+    ///
+    /// assert_eq!(cache.entry_lru().unwrap().key(), &1);
+    /// // note: entry_lru doesn't promote by itself. Promotion only happens if you access
+    /// //    the entry's value without using one of the peek methods
+    /// assert_eq!(cache.entry_lru().unwrap().get(), &"a");
+    /// assert_eq!(cache.entry_lru().unwrap().get(), &"");
+    /// ```
+    pub fn entry_lru(&mut self) -> Option<OccupiedEntry<K, V, BorrowedKey<K>, S>> {
+        if self.is_empty() {
+            return None;
+        }
+        let node = unsafe { NonNull::new_unchecked(self.root.unwrap_unchecked().as_ref().prev) };
+        Some(OccupiedEntry {
+            cache: self,
+            node,
+            extra: OccupiedExtra::Key(None),
+        })
+    }
+
+    pub fn entry_for<Q>(&mut self, k: Q) -> Entry<K, V, Q, S>
+    where
+        Q: Key,
+        K: Borrow<Q::Key>,
+    {
+        match self
+            .map
+            .get(KeyWrapper::from_ref(Q::as_ref(&k)))
+            .map(|x| x.0)
+        {
+            None => Entry::Vacant(VacantEntry {
+                cache: self,
+                key: k,
+            }),
+            Some(node) => Entry::Occupied(OccupiedEntry {
+                cache: self,
+                node,
+                extra: OccupiedExtra::Key(Some(k)),
+            }),
+        }
+    }
+
     /// Puts a key-value pair into cache. If the key already exists in the cache, then it updates
     /// the key's value and returns the old value. Otherwise, `None` is returned.
     ///
@@ -269,7 +1221,10 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// assert_eq!(cache.get(&2), Some(&"beta"));
     /// ```
     pub fn put(&mut self, k: K, v: V) -> Option<V> {
-        self.capturing_put(k, v, false).map(|(_, v)| v)
+        Some(match self.entry(k) {
+            Entry::Occupied(mut entry) => entry.insert(v),
+            Entry::Vacant(entry) => entry.try_insert(v).err()?.1,
+        })
     }
 
     /// Pushes a key-value pair into the cache. If an entry with key `k` already exists in
@@ -296,84 +1251,13 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// assert_eq!(cache.get(&3), Some(&"alpha"));
     /// ```
     pub fn push(&mut self, k: K, v: V) -> Option<(K, V)> {
-        self.capturing_put(k, v, true)
-    }
-
-    // Used internally by `put` and `push` to add a new entry to the lru.
-    // Takes ownership of and returns entries replaced due to the cache's capacity
-    // when `capture` is true.
-    fn capturing_put(&mut self, k: K, mut v: V, capture: bool) -> Option<(K, V)> {
-        let node_ref = self.map.get(KeyWrapper::from_ref(&k));
-
-        match node_ref {
-            Some(node_ref) => {
-                // if the key is already in the cache just update its value and move it to the
-                // front of the list
-                let node_ptr: *mut LruEntry<K, V> = node_ref.0.as_ptr();
-
-                // gets a reference to the node to perform a swap and drops it right after
-                let node_ref = unsafe { &mut (*(*node_ptr).val.as_mut_ptr()) };
-                mem::swap(&mut v, node_ref);
-                let _ = node_ref;
-
-                self.detach(node_ptr);
-                self.attach(node_ptr);
-                Some((k, v))
-            }
-            None => {
-                let (replaced, node) = match self.replace_or_create_node(k, v) {
-                    Ok(res) => res,
-                    Err(rejected) => return Some(rejected),
-                };
-                let node_ptr: *mut LruEntry<K, V> = node.as_ptr();
-
-                self.alloc_root();
-                self.attach(node_ptr);
-
-                self.map.insert(EntryWrapper(node));
-
-                replaced.filter(|_| capture)
-            }
-        }
-    }
-
-    // Used internally to swap out a node if the cache is full or to create a new node if space
-    // is available. Shared between `put`, `push`, `get_or_insert`, and `get_or_insert_mut`.
-    #[allow(clippy::type_complexity)]
-    fn replace_or_create_node(
-        &mut self,
-        k: K,
-        v: V,
-    ) -> Result<(Option<(K, V)>, NonNull<LruEntry<K, V>>), (K, V)> {
-        if self.len() == self.cap() {
-            if self.cap() == 0 {
-                return Err((k, v));
-            }
-            // if the cache is full, remove the last entry so we can use it for the new key
-            // safety: root can be unwrapped unchecked because if len == cap (which implies not
-            //  empty since cap is nonzero), we've already allocated
-            let old_key = unsafe { &(*(*self.root.unwrap_unchecked().as_ref().prev).key.as_ptr()) };
-            let old_node = self.map.take(KeyWrapper::from_ref(old_key)).unwrap().0;
-            let node_ptr: *mut LruEntry<K, V> = old_node.as_ptr();
-
-            // read out the node's old key and value and then replace it
-            let replaced = unsafe {
-                (
-                    mem::replace(&mut (*node_ptr).key, mem::MaybeUninit::new(k)).assume_init(),
-                    mem::replace(&mut (*node_ptr).val, mem::MaybeUninit::new(v)).assume_init(),
-                )
-            };
-
-            self.detach(node_ptr);
-
-            Ok((Some(replaced), old_node))
-        } else {
-            // if the cache is not full allocate a new LruEntry
-            // Safety: We allocate, turn into raw, and get NonNull all in one step.
-            Ok((None, unsafe {
-                NonNull::new_unchecked(Box::into_raw(Box::new(LruEntry::new(k, v))))
-            }))
-        }
+        Some(match self.entry(k) {
+            Entry::Occupied(entry) => entry.replace_entry(v),
+            Entry::Vacant(entry) => match entry.try_insert_entry(v) {
+                Ok(mut entry) => entry.take_evicted()?,
+                Err(rejected) => rejected,
+            },
+        })
     }
 
     /// Returns a reference to the value of the key in the cache or `None` if it is not
@@ -425,15 +1309,9 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        if let Some(node) = self.map.get(KeyWrapper::from_ref(k)) {
-            let node_ptr: *mut LruEntry<K, V> = node.0.as_ptr();
-
-            self.detach(node_ptr);
-            self.attach(node_ptr);
-
-            Some(unsafe { &mut *(*node_ptr).val.as_mut_ptr() })
-        } else {
-            None
+        match self.entry_ref(k) {
+            Entry::Occupied(entry) => Some(entry.into_mut()),
+            Entry::Vacant(_) => None,
         }
     }
 
@@ -549,23 +1427,9 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     where
         F: FnOnce() -> V,
     {
-        if let Some(node) = self.map.get(KeyWrapper::from_ref(&k)) {
-            let node_ptr: *mut LruEntry<K, V> = node.0.as_ptr();
-
-            self.detach(node_ptr);
-            self.attach(node_ptr);
-
-            Ok(unsafe { &mut *(*node_ptr).val.as_mut_ptr() })
-        } else {
-            let v = f();
-            let (_, node) = self.replace_or_create_node(k, v)?;
-            let node_ptr: *mut LruEntry<K, V> = node.as_ptr();
-
-            self.alloc_root();
-            self.attach(node_ptr);
-
-            self.map.insert(EntryWrapper(node));
-            Ok(unsafe { &mut *(*node_ptr).val.as_mut_ptr() })
+        match self.entry(k) {
+            Entry::Occupied(entry) => Ok(entry.into_mut()),
+            Entry::Vacant(entry) => entry.try_insert(f()),
         }
     }
 
@@ -616,9 +1480,9 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        match self.map.get(KeyWrapper::from_ref(k)) {
-            None => None,
-            Some(node) => Some(unsafe { &mut *(*node.0.as_ptr()).val.as_mut_ptr() }),
+        match self.entry_ref(k) {
+            Entry::Occupied(entry) => Some(entry.into_peek()),
+            Entry::Vacant(_) => None,
         }
     }
 
@@ -726,16 +1590,9 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        match self.map.take(KeyWrapper::from_ref(k)) {
-            None => None,
-            Some(old_node) => {
-                let mut old_node = unsafe { *Box::from_raw(old_node.0.as_ptr()) };
-
-                self.detach(&mut old_node);
-
-                let LruEntry { key, val, .. } = old_node;
-                unsafe { Some((key.assume_init(), val.assume_init())) }
-            }
+        match self.entry_ref(k) {
+            Entry::Occupied(entry) => Some(entry.remove_entry()),
+            Entry::Vacant(_) => None,
         }
     }
 
@@ -759,11 +1616,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// assert_eq!(cache.len(), 0);
     /// ```
     pub fn pop_lru(&mut self) -> Option<(K, V)> {
-        if self.is_empty() {
-            return None;
-        }
-        let key = unsafe { &*(*self.root.unwrap_unchecked().as_ref().prev).key.as_ptr() };
-        self.pop_entry(key)
+        Some(self.entry_lru()?.remove_entry())
     }
 
     /// Marks the key as the most recently used one.
@@ -792,10 +1645,8 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        if let Some(node) = self.map.get(KeyWrapper::from_ref(k)) {
-            let node_ptr: *mut LruEntry<K, V> = node.0.as_ptr();
-            self.detach(node_ptr);
-            self.attach(node_ptr);
+        if let Entry::Occupied(mut entry) = self.entry_ref(k) {
+            entry.promote();
         }
     }
 
@@ -827,10 +1678,8 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        if let Some(node) = self.map.get(KeyWrapper::from_ref(k)) {
-            let node_ptr: *mut LruEntry<K, V> = node.0.as_ptr();
-            self.detach(node_ptr);
-            self.attach_last(node_ptr);
+        if let Entry::Occupied(mut entry) = self.entry_ref(k) {
+            entry.demote();
         }
     }
 
