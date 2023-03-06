@@ -78,30 +78,11 @@ use core::usize;
 extern crate std;
 
 #[cfg(feature = "hashbrown")]
-use hashbrown::HashMap;
+use hashbrown::HashSet;
 #[cfg(not(feature = "hashbrown"))]
-use std::collections::HashMap;
+use std::collections::HashSet;
 
 extern crate alloc;
-
-// Struct used to hold a reference to a key
-struct KeyRef<K> {
-    k: *const K,
-}
-
-impl<K: Hash> Hash for KeyRef<K> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        unsafe { (*self.k).hash(state) }
-    }
-}
-
-impl<K: PartialEq> PartialEq for KeyRef<K> {
-    fn eq(&self, other: &KeyRef<K>) -> bool {
-        unsafe { (*self.k).eq(&*other.k) }
-    }
-}
-
-impl<K: Eq> Eq for KeyRef<K> {}
 
 // This type exists to allow a "blanket" Borrow impl for KeyRef without conflicting with the
 //  stdlib blanket impl
@@ -128,17 +109,6 @@ impl<K: ?Sized + PartialEq> PartialEq for KeyWrapper<K> {
 }
 
 impl<K: ?Sized + Eq> Eq for KeyWrapper<K> {}
-
-impl<K, Q> Borrow<KeyWrapper<Q>> for KeyRef<K>
-where
-    K: Borrow<Q>,
-    Q: ?Sized,
-{
-    fn borrow(&self) -> &KeyWrapper<Q> {
-        let key = unsafe { &*self.k }.borrow();
-        KeyWrapper::from_ref(key)
-    }
-}
 
 // Struct used to hold a key value pair. Also contains references to previous and next entries
 // so we can maintain the entries in a linked list ordered by their use.
@@ -174,9 +144,42 @@ pub type DefaultHasher = hashbrown::hash_map::DefaultHashBuilder;
 #[cfg(not(feature = "hashbrown"))]
 pub type DefaultHasher = std::collections::hash_map::RandomState;
 
+// Struct used to wrap entries to compare/hash by key
+struct EntryWrapper<K, V>(NonNull<LruEntry<K, V>>);
+
+impl<K, V> EntryWrapper<K, V> {
+    fn key(&self) -> &K {
+        unsafe { self.0.as_ref().key.assume_init_ref() }
+    }
+}
+
+impl<K: Hash, V> Hash for EntryWrapper<K, V> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.key().hash(state)
+    }
+}
+
+impl<K: PartialEq, V> PartialEq for EntryWrapper<K, V> {
+    fn eq(&self, other: &EntryWrapper<K, V>) -> bool {
+        self.key().eq(other.key())
+    }
+}
+
+impl<K: Eq, V> Eq for EntryWrapper<K, V> {}
+
+impl<K, V, Q> Borrow<KeyWrapper<Q>> for EntryWrapper<K, V>
+where
+    K: Borrow<Q>,
+    Q: ?Sized,
+{
+    fn borrow(&self) -> &KeyWrapper<Q> {
+        KeyWrapper::from_ref(self.key().borrow())
+    }
+}
+
 /// An LRU Cache
 pub struct LruCache<K, V, S = DefaultHasher> {
-    map: HashMap<KeyRef<K>, NonNull<LruEntry<K, V>>, S>,
+    map: HashSet<EntryWrapper<K, V>, S>,
     cap: usize,
 
     // root is a sigil node to facilitate inserting entries
@@ -193,7 +196,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     /// let mut cache: LruCache<isize, &str> = LruCache::new(10);
     /// ```
     pub fn new(cap: usize) -> LruCache<K, V> {
-        LruCache::construct(cap, HashMap::with_capacity(cap))
+        LruCache::construct(cap, HashSet::with_capacity(cap))
     }
 
     /// Creates a new LRU Cache that never automatically evicts items.
@@ -205,7 +208,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     /// let mut cache: LruCache<isize, &str> = LruCache::unbounded();
     /// ```
     pub fn unbounded() -> LruCache<K, V> {
-        LruCache::construct(usize::MAX, HashMap::default())
+        LruCache::construct(usize::MAX, HashSet::default())
     }
 }
 
@@ -222,7 +225,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// let mut cache: LruCache<isize, &str> = LruCache::with_hasher(10, s);
     /// ```
     pub fn with_hasher(cap: usize, hash_builder: S) -> LruCache<K, V, S> {
-        LruCache::construct(cap, HashMap::with_capacity_and_hasher(cap, hash_builder))
+        LruCache::construct(cap, HashSet::with_capacity_and_hasher(cap, hash_builder))
     }
 
     /// Creates a new LRU Cache that never automatically evicts items and
@@ -237,14 +240,11 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// let mut cache: LruCache<isize, &str> = LruCache::unbounded_with_hasher(s);
     /// ```
     pub fn unbounded_with_hasher(hash_builder: S) -> LruCache<K, V, S> {
-        LruCache::construct(usize::MAX, HashMap::with_hasher(hash_builder))
+        LruCache::construct(usize::MAX, HashSet::with_hasher(hash_builder))
     }
 
     /// Creates a new LRU Cache with the given capacity.
-    fn construct(
-        cap: usize,
-        map: HashMap<KeyRef<K>, NonNull<LruEntry<K, V>>, S>,
-    ) -> LruCache<K, V, S> {
+    fn construct(cap: usize, map: HashSet<EntryWrapper<K, V>, S>) -> LruCache<K, V, S> {
         LruCache {
             map,
             cap,
@@ -303,13 +303,13 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     // Takes ownership of and returns entries replaced due to the cache's capacity
     // when `capture` is true.
     fn capturing_put(&mut self, k: K, mut v: V, capture: bool) -> Option<(K, V)> {
-        let node_ref = self.map.get_mut(&KeyRef { k: &k });
+        let node_ref = self.map.get(KeyWrapper::from_ref(&k));
 
         match node_ref {
             Some(node_ref) => {
                 // if the key is already in the cache just update its value and move it to the
                 // front of the list
-                let node_ptr: *mut LruEntry<K, V> = node_ref.as_ptr();
+                let node_ptr: *mut LruEntry<K, V> = node_ref.0.as_ptr();
 
                 // gets a reference to the node to perform a swap and drops it right after
                 let node_ref = unsafe { &mut (*(*node_ptr).val.as_mut_ptr()) };
@@ -330,8 +330,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
                 self.alloc_root();
                 self.attach(node_ptr);
 
-                let keyref = unsafe { (*node_ptr).key.as_ptr() };
-                self.map.insert(KeyRef { k: keyref }, node);
+                self.map.insert(EntryWrapper(node));
 
                 replaced.filter(|_| capture)
             }
@@ -351,12 +350,10 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
                 return Err((k, v));
             }
             // if the cache is full, remove the last entry so we can use it for the new key
-            let old_key = KeyRef {
-                // safety: root can be unwrapped unchecked because if len == cap (which implies not
-                //  empty since cap is nonzero), we've already allocated
-                k: unsafe { &(*(*self.root.unwrap_unchecked().as_ref().prev).key.as_ptr()) },
-            };
-            let old_node = self.map.remove(&old_key).unwrap();
+            // safety: root can be unwrapped unchecked because if len == cap (which implies not
+            //  empty since cap is nonzero), we've already allocated
+            let old_key = unsafe { &(*(*self.root.unwrap_unchecked().as_ref().prev).key.as_ptr()) };
+            let old_node = self.map.take(KeyWrapper::from_ref(old_key)).unwrap().0;
             let node_ptr: *mut LruEntry<K, V> = old_node.as_ptr();
 
             // read out the node's old key and value and then replace it
@@ -428,8 +425,8 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        if let Some(node) = self.map.get_mut(KeyWrapper::from_ref(k)) {
-            let node_ptr: *mut LruEntry<K, V> = node.as_ptr();
+        if let Some(node) = self.map.get(KeyWrapper::from_ref(k)) {
+            let node_ptr: *mut LruEntry<K, V> = node.0.as_ptr();
 
             self.detach(node_ptr);
             self.attach(node_ptr);
@@ -552,8 +549,8 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     where
         F: FnOnce() -> V,
     {
-        if let Some(node) = self.map.get_mut(&KeyRef { k: &k }) {
-            let node_ptr: *mut LruEntry<K, V> = node.as_ptr();
+        if let Some(node) = self.map.get(KeyWrapper::from_ref(&k)) {
+            let node_ptr: *mut LruEntry<K, V> = node.0.as_ptr();
 
             self.detach(node_ptr);
             self.attach(node_ptr);
@@ -567,8 +564,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             self.alloc_root();
             self.attach(node_ptr);
 
-            let keyref = unsafe { (*node_ptr).key.as_ptr() };
-            self.map.insert(KeyRef { k: keyref }, node);
+            self.map.insert(EntryWrapper(node));
             Ok(unsafe { &mut *(*node_ptr).val.as_mut_ptr() })
         }
     }
@@ -596,7 +592,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     {
         self.map
             .get(KeyWrapper::from_ref(k))
-            .map(|node| unsafe { &*node.as_ref().val.as_ptr() })
+            .map(|node| unsafe { &*node.0.as_ref().val.as_ptr() })
     }
 
     /// Returns a mutable reference to the value corresponding to the key in the cache or `None`
@@ -620,9 +616,9 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        match self.map.get_mut(KeyWrapper::from_ref(k)) {
+        match self.map.get(KeyWrapper::from_ref(k)) {
             None => None,
-            Some(node) => Some(unsafe { &mut *(*node.as_ptr()).val.as_mut_ptr() }),
+            Some(node) => Some(unsafe { &mut *(*node.0.as_ptr()).val.as_mut_ptr() }),
         }
     }
 
@@ -680,7 +676,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        self.map.contains_key(KeyWrapper::from_ref(k))
+        self.map.contains(KeyWrapper::from_ref(k))
     }
 
     /// Removes and returns the value corresponding to the key from the cache or
@@ -730,10 +726,10 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        match self.map.remove(KeyWrapper::from_ref(k)) {
+        match self.map.take(KeyWrapper::from_ref(k)) {
             None => None,
             Some(old_node) => {
-                let mut old_node = unsafe { *Box::from_raw(old_node.as_ptr()) };
+                let mut old_node = unsafe { *Box::from_raw(old_node.0.as_ptr()) };
 
                 self.detach(&mut old_node);
 
@@ -796,8 +792,8 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        if let Some(node) = self.map.get_mut(KeyWrapper::from_ref(k)) {
-            let node_ptr: *mut LruEntry<K, V> = node.as_ptr();
+        if let Some(node) = self.map.get(KeyWrapper::from_ref(k)) {
+            let node_ptr: *mut LruEntry<K, V> = node.0.as_ptr();
             self.detach(node_ptr);
             self.attach(node_ptr);
         }
@@ -831,8 +827,8 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        if let Some(node) = self.map.get_mut(KeyWrapper::from_ref(k)) {
-            let node_ptr: *mut LruEntry<K, V> = node.as_ptr();
+        if let Some(node) = self.map.get(KeyWrapper::from_ref(k)) {
+            let node_ptr: *mut LruEntry<K, V> = node.0.as_ptr();
             self.detach(node_ptr);
             self.attach_last(node_ptr);
         }
@@ -1048,8 +1044,8 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
 
 impl<K, V, S> Drop for LruCache<K, V, S> {
     fn drop(&mut self) {
-        self.map.drain().for_each(|(_, node)| unsafe {
-            let mut node = *Box::from_raw(node.as_ptr());
+        self.map.drain().for_each(|node| unsafe {
+            let mut node = *Box::from_raw(node.0.as_ptr());
             ptr::drop_in_place((node).key.as_mut_ptr());
             ptr::drop_in_place((node).val.as_mut_ptr());
         });
