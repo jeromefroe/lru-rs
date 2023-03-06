@@ -182,7 +182,7 @@ pub struct LruCache<K, V, S = DefaultHasher> {
     cap: NonZeroUsize,
 
     // root is a sigil node to facilitate inserting entries
-    root: *mut LruEntry<K, V>,
+    root: Option<NonNull<LruEntry<K, V>>>,
 }
 
 impl<K: Hash + Eq, V> LruCache<K, V> {
@@ -256,20 +256,11 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         cap: NonZeroUsize,
         map: HashMap<KeyRef<K>, NonNull<LruEntry<K, V>>, S>,
     ) -> LruCache<K, V, S> {
-        // NB: The compiler warns that cache does not need to be marked as mutable if we
-        // declare it as such since we only mutate it inside the unsafe block.
-        let cache = LruCache {
+        LruCache {
             map,
             cap,
-            root: Box::into_raw(Box::new(LruEntry::new_sigil())),
-        };
-
-        unsafe {
-            (*cache.root).next = cache.root;
-            (*cache.root).prev = cache.root;
+            root: None,
         }
-
-        cache
     }
 
     /// Puts a key-value pair into cache. If the key already exists in the cache, then it updates
@@ -346,6 +337,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
                 let (replaced, node) = self.replace_or_create_node(k, v);
                 let node_ptr: *mut LruEntry<K, V> = node.as_ptr();
 
+                self.alloc_root();
                 self.attach(node_ptr);
 
                 let keyref = unsafe { (*node_ptr).key.as_ptr() };
@@ -363,7 +355,9 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         if self.len() == self.cap().get() {
             // if the cache is full, remove the last entry so we can use it for the new key
             let old_key = KeyRef {
-                k: unsafe { &(*(*(*self.root).prev).key.as_ptr()) },
+                // safety: root can be unwrapped unchecked because if len == cap (which implies not
+                //  empty since cap is nonzero), we've already allocated
+                k: unsafe { &(*(*self.root.unwrap_unchecked().as_ref().prev).key.as_ptr()) },
             };
             let old_node = self.map.remove(&old_key).unwrap();
             let node_ptr: *mut LruEntry<K, V> = old_node.as_ptr();
@@ -518,6 +512,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             let (_, node) = self.replace_or_create_node(k, v);
             let node_ptr: *mut LruEntry<K, V> = node.as_ptr();
 
+            self.alloc_root();
             self.attach(node_ptr);
 
             let keyref = unsafe { (*node_ptr).key.as_ptr() };
@@ -604,7 +599,9 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
 
         let (key, val);
         unsafe {
-            let node = (*self.root).prev;
+            // safety: we can unwrap root unchecked because if we're not empty, we've already
+            //  allocated
+            let node = self.root.unwrap_unchecked().as_ref().prev;
             key = &(*(*node).key.as_ptr()) as &K;
             val = &(*(*node).val.as_ptr()) as &V;
         }
@@ -724,7 +721,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         if self.is_empty() {
             return None;
         }
-        let key = unsafe { &*(*(*self.root).prev).key.as_ptr() };
+        let key = unsafe { &*(*self.root.unwrap_unchecked().as_ref().prev).key.as_ptr() };
         self.pop_entry(key)
     }
 
@@ -932,8 +929,8 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     pub fn iter(&self) -> Iter<'_, K, V> {
         Iter {
             len: self.len(),
-            ptr: unsafe { (*self.root).next },
-            end: unsafe { (*self.root).prev },
+            ptr: unsafe { self.root.map_or(ptr::null_mut(), |x| x.as_ref().next) },
+            end: unsafe { self.root.map_or(ptr::null_mut(), |x| x.as_ref().prev) },
             phantom: PhantomData,
         }
     }
@@ -968,8 +965,8 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     pub fn iter_mut(&mut self) -> IterMut<'_, K, V> {
         IterMut {
             len: self.len(),
-            ptr: unsafe { (*self.root).next },
-            end: unsafe { (*self.root).prev },
+            ptr: unsafe { self.root.map_or(ptr::null_mut(), |x| x.as_ref().next) },
+            end: unsafe { self.root.map_or(ptr::null_mut(), |x| x.as_ref().prev) },
             phantom: PhantomData,
         }
     }
@@ -981,12 +978,22 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         }
     }
 
+    fn alloc_root(&mut self) {
+        self.root.get_or_insert_with(|| unsafe {
+            let root = Box::into_raw(Box::new(LruEntry::new_sigil()));
+            (*root).next = root;
+            (*root).prev = root;
+            NonNull::new_unchecked(root)
+        });
+    }
+
     // Attaches `node` after the sigil `self.head` node.
     fn attach(&mut self, node: *mut LruEntry<K, V>) {
         unsafe {
-            (*node).next = (*self.root).next;
-            (*node).prev = self.root;
-            (*self.root).next = node;
+            let root = self.root.unwrap_unchecked().as_ptr();
+            (*node).next = (*root).next;
+            (*node).prev = root;
+            (*root).next = node;
             (*(*node).next).prev = node;
         }
     }
@@ -994,9 +1001,10 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     // Attaches `node` before the sigil `self.tail` node.
     fn attach_last(&mut self, node: *mut LruEntry<K, V>) {
         unsafe {
-            (*node).next = self.root;
-            (*node).prev = (*self.root).prev;
-            (*self.root).prev = node;
+            let root = self.root.unwrap_unchecked().as_ptr();
+            (*node).next = root;
+            (*node).prev = (*root).prev;
+            (*root).prev = node;
             (*(*node).prev).next = node;
         }
     }
@@ -1012,7 +1020,9 @@ impl<K, V, S> Drop for LruCache<K, V, S> {
         // We rebox the head/tail, and because these are maybe-uninit
         // they do not have the absent k/v dropped.
 
-        let _ = unsafe { *Box::from_raw(self.root) };
+        if let Some(root) = self.root {
+            let _ = unsafe { *Box::from_raw(root.as_ptr()) };
+        }
     }
 }
 
