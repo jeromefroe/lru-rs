@@ -73,6 +73,7 @@ use core::iter::FusedIterator;
 use core::marker::PhantomData;
 use core::mem::{self, replace};
 use core::ptr::{self, NonNull};
+use core::sync::atomic::{AtomicUsize, Ordering};
 use core::usize;
 #[cfg(not(feature = "no_std"))]
 use std::borrow::ToOwned;
@@ -84,6 +85,7 @@ extern crate std;
 use hashbrown::HashSet;
 #[cfg(not(feature = "hashbrown"))]
 use std::collections::HashSet;
+use std::ops::{Deref, DerefMut};
 
 extern crate alloc;
 
@@ -180,6 +182,380 @@ where
     }
 }
 
+/// Specifies how new entries should be added to `LruCache`s. Used as a return by `Limiter::on_add`.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum AddBehavior {
+    /// Accepts the new entry by adding it to the list without evicting any existing entries.
+    Accept,
+    /// Accepts the new entry by evicting the LRU entry. If the new element is about to make the
+    /// cache oversized, this should be preferred over `Accept` because allows the cache
+    /// implementation to reuse memory from the LRU entry.
+    /// Note: `Evict` is only relevant for `Limiter::on_add` calls. For `Limiter::on_update` calls,
+    /// it behaves exactly like `Accept`.
+    Evict,
+    /// Rejects the new entry because it is too big for the cache's capacity.
+    /// Note: `Limiter::on_remove` will not be called for the entry if it is rejected. Therefore, a
+    /// rejected `Limiter::on_add` should leave the limiter's internal state unchanged.
+    Reject,
+}
+
+/// A trait for implementing limiters, which constrain the maximum cache of an `LruCache`. Limiters
+/// may limit the number of elements, the total memory usage of the elements, or other metrics.
+///
+/// # Example
+///
+/// ```
+/// // This example implements a simple sum limiter
+///
+/// use std::cell::RefCell;
+/// use std::sync::atomic::{AtomicUsize, Ordering};
+/// use lru::{AddBehavior, Limiter, LruCache};
+///
+/// /// A limiter for the sum of the cache values
+/// struct SumLimited {
+///     limit: usize,
+///     current: RefCell<usize>
+/// }
+///
+/// impl<K, S> Limiter<K, usize, S> for SumLimited {
+///     fn is_oversized(&self, cache: &LruCache<K, usize, impl Limiter<K, usize, S>, S>) -> bool {
+///         *self.current.borrow() > self.limit
+///     }
+///
+///     fn on_add(&self, cache: &LruCache<K, usize, impl Limiter<K, usize, S>, S>, key: &K, value: &usize) -> AddBehavior {
+///         if *value > self.limit {
+///             AddBehavior::Reject
+///         } else {
+///             let mut current = self.current.borrow_mut();
+///             *current += value;
+///             if *current > self.limit {
+///                 AddBehavior::Evict
+///             } else {
+///                 AddBehavior::Accept
+///             }
+///         }
+///     }
+///
+///     fn on_update(&self, cache: &LruCache<K, usize, impl Limiter<K, usize, S>, S>, old_key: &K, old_value: &usize, new_key: Option<&K>, new_value: Option<&usize>) -> AddBehavior {
+///         let mut current = self.current.borrow_mut();
+///         let mut next = *current;
+///         if let Some(new_value) = new_value {
+///             next -= old_value;
+///             next += new_value;
+///         }
+///         if next > self.limit {
+///             AddBehavior::Reject
+///         } else {
+///             *current = next;
+///             AddBehavior::Accept
+///         }
+///     }
+///
+///     fn on_remove(&self, cache: &LruCache<K, usize, impl Limiter<K, usize, S>, S>, key: &K, value: &usize) {
+///         *self.current.borrow_mut() -= value;
+///     }
+/// }
+/// ```
+pub trait Limiter<K, V, S> {
+    /// Returns true if the cache is currently too big.
+    fn is_oversized(&self, cache: &LruCache<K, V, impl Limiter<K, V, S>, S>) -> bool;
+
+    /// Called when a new element is added to the cache to update any aggregations used by the
+    /// limiter and to specify what to do with the element. See `AddBehavior` for the meanings of
+    /// the different return values.
+    fn on_add(
+        &self,
+        cache: &LruCache<K, V, impl Limiter<K, V, S>, S>,
+        key: &K,
+        value: &V,
+    ) -> AddBehavior;
+
+    /// Called when an element is updated in the cache update any aggregations used by the
+    /// limiter and to specify what to do with the element. See `AddBehavior` for the meanings of
+    /// the different return values.
+    ///
+    /// Note that if the key xor the value is being updated, the other will be `None`.
+    #[allow(unused_variables)]
+    fn on_update(
+        &self,
+        cache: &LruCache<K, V, impl Limiter<K, V, S>, S>,
+        old_key: &K,
+        old_value: &V,
+        new_key: Option<&K>,
+        new_value: Option<&V>,
+    ) -> AddBehavior;
+
+    /// Called when an element is removed from the cache to update any aggregations used by the
+    /// limiter. Note that this function is only called if the element was successfully added in
+    /// the first place (i.e. if the on_add call for the element returned `AddBehavior::Accept` or
+    /// `AddBehavior::Evict`)
+    #[allow(unused_variables)]
+    fn on_remove(&self, cache: &LruCache<K, V, impl Limiter<K, V, S>, S>, key: &K, value: &V) {}
+}
+
+/// A `Limiter` which does not limit the max size of the cache.
+#[derive(Debug, Copy, Clone)]
+pub struct Unlimited;
+
+impl<K, V, S> Limiter<K, V, S> for Unlimited {
+    fn is_oversized(&self, _cache: &LruCache<K, V, impl Limiter<K, V, S>, S>) -> bool {
+        false
+    }
+
+    fn on_add(
+        &self,
+        _cache: &LruCache<K, V, impl Limiter<K, V, S>, S>,
+        _key: &K,
+        _value: &V,
+    ) -> AddBehavior {
+        AddBehavior::Accept
+    }
+
+    fn on_update(
+        &self,
+        _cache: &LruCache<K, V, impl Limiter<K, V, S>, S>,
+        _old_key: &K,
+        _old_value: &V,
+        _new_key: Option<&K>,
+        _new_value: Option<&V>,
+    ) -> AddBehavior {
+        AddBehavior::Accept
+    }
+}
+
+/// A `Limiter` which limits the max len of the cache.
+#[derive(Debug, Copy, Clone)]
+pub struct SizeLimited(usize);
+
+impl SizeLimited {
+    /// Creates a new `SizeLimited` with the given limit
+    pub fn new(limit: usize) -> Self {
+        Self(limit)
+    }
+
+    /// Gets the current limit
+    pub fn limit(&self) -> usize {
+        self.0
+    }
+
+    /// Sets the size limit
+    pub fn set_limit(&mut self, limit: usize) {
+        self.0 = limit;
+    }
+}
+
+impl<K: Hash + Eq, V, S: BuildHasher> Limiter<K, V, S> for SizeLimited {
+    fn is_oversized(&self, cache: &LruCache<K, V, impl Limiter<K, V, S>, S>) -> bool {
+        cache.len() > self.0
+    }
+
+    fn on_add(
+        &self,
+        cache: &LruCache<K, V, impl Limiter<K, V, S>, S>,
+        _key: &K,
+        _value: &V,
+    ) -> AddBehavior {
+        if self.0 == 0 {
+            AddBehavior::Reject
+        } else if cache.len() >= self.0 {
+            AddBehavior::Evict
+        } else {
+            AddBehavior::Accept
+        }
+    }
+
+    fn on_update(
+        &self,
+        _cache: &LruCache<K, V, impl Limiter<K, V, S>, S>,
+        _old_key: &K,
+        _old_value: &V,
+        _new_key: Option<&K>,
+        _new_value: Option<&V>,
+    ) -> AddBehavior {
+        // updates don't change length. Accept unconditionally
+        AddBehavior::Accept
+    }
+}
+
+/// A trait for implementing arbitrary cost functions for `CostLimited`. Note that you can create a
+/// `CostFn` from a pair of closures, so it is often not necessary to implement this trait directly.
+///
+/// It is a logic error for the cost of a key or value to change while it is stored in an `LruCache`
+/// (similar to changing the hash of a key while it is in a `HashMap`). The behavior resulting from
+/// such a logic error is not specified, but will be encapsulated to the `LruCache` that observed
+/// the logic error and not result in undefined behavior. This could include panics, incorrect
+/// results, aborts, memory leaks, and non-termination.
+///
+/// # Example
+///
+/// ```
+/// use lru::{CostLimited, LruCache};
+/// let limiter = CostLimited::with_func(100, (
+///     |key: &String| key.len(),
+///     |value: &usize| *value
+/// ));
+/// let mut cache = LruCache::with_limiter(limiter);
+/// cache.put("a".to_string(), 90);  // costs 91
+/// cache.put("b".to_string(), 10);  // costs 11, evicts "a"
+/// assert_eq!(cache.get("a"), None)
+/// ```
+pub trait CostFn<K, V> {
+    /// Gets the cost of a key in the cache
+    fn key_cost(&self, key: &K) -> usize;
+    /// Gets the cost of a value in the cache
+    fn value_cost(&self, value: &V) -> usize;
+}
+
+impl<K, V, F: Fn(&K) -> usize, G: Fn(&V) -> usize> CostFn<K, V> for (F, G) {
+    fn key_cost(&self, key: &K) -> usize {
+        (self.0)(key)
+    }
+
+    fn value_cost(&self, value: &V) -> usize {
+        (self.1)(value)
+    }
+}
+
+/// A `Limiter` which limits the max "cost" of the cache based on an arbitrary cost function
+#[derive(Debug)]
+pub struct CostLimited<F> {
+    limit: usize,
+    current: AtomicUsize,
+    cost_func: F,
+}
+
+impl<F: Default> CostLimited<F> {
+    /// Creates a new `CostLimited` with the given limit and the default value of the cost function
+    pub fn new(limit: usize) -> Self {
+        Self::with_func(limit, F::default())
+    }
+}
+
+impl<F> CostLimited<F> {
+    /// The maximum limit allowed by `CostLimited`
+    pub const MAX_LIMIT: usize = usize::MAX / 2;
+
+    /// Creates a new `CostLimited` with the given limit and cost function
+    pub fn with_func(limit: usize, cost_func: F) -> Self {
+        let mut this = Self {
+            limit: 0,
+            current: AtomicUsize::new(0),
+            cost_func,
+        };
+        this.set_limit(limit);
+        this
+    }
+
+    /// Gets the current limit
+    pub fn limit(&self) -> usize {
+        self.limit
+    }
+
+    /// Sets the limit
+    pub fn set_limit(&mut self, limit: usize) {
+        if limit > Self::MAX_LIMIT {
+            panic!("Limit ({}) cannot exceed {}", limit, Self::MAX_LIMIT);
+        }
+        self.limit = limit;
+    }
+
+    /// Gets the current total cost of the cache.
+    pub fn current(&self) -> usize {
+        self.current.load(Ordering::Acquire)
+    }
+
+    /// Gets a ref to the cost function
+    pub fn cost_func(&self) -> &F {
+        &self.cost_func
+    }
+
+    /// Gets a mutable ref to the cost function
+    pub fn cost_func_mut(&mut self) -> &mut F {
+        &mut self.cost_func
+    }
+
+    /// Consumes the `CostLimited` and returns the inner cost function
+    pub fn into_cost_func(self) -> F {
+        self.cost_func
+    }
+
+    fn add_cost(current: usize, cost: usize) -> usize {
+        current.checked_add(cost).expect(
+            "Cost overflowed. This shouldn't be possible because of the MAX_LIMIT. This is a bug",
+        )
+    }
+
+    fn sub_cost(current: usize, cost: usize) -> usize {
+        current
+            .checked_sub(cost)
+            .expect("Key or value cost changed between insertion and removal")
+    }
+
+    fn update_cost(&self, mut func: impl FnMut(usize) -> usize) -> AddBehavior {
+        let mut prev = self.current.load(Ordering::Acquire);
+        let next = loop {
+            let next = func(prev);
+            let res =
+                self.current
+                    .compare_exchange_weak(prev, next, Ordering::AcqRel, Ordering::Acquire);
+            match res {
+                Ok(_) => break next,
+                Err(new_prev) => prev = new_prev,
+            }
+        };
+        if next > self.limit {
+            AddBehavior::Evict
+        } else {
+            AddBehavior::Accept
+        }
+    }
+}
+
+impl<K, V, S, F: CostFn<K, V>> Limiter<K, V, S> for CostLimited<F> {
+    fn is_oversized(&self, _cache: &LruCache<K, V, impl Limiter<K, V, S>, S>) -> bool {
+        self.current() > self.limit
+    }
+
+    fn on_add(
+        &self,
+        _cache: &LruCache<K, V, impl Limiter<K, V, S>, S>,
+        key: &K,
+        value: &V,
+    ) -> AddBehavior {
+        let cost = self.cost_func.key_cost(key) + self.cost_func.value_cost(value);
+        if cost > self.limit {
+            return AddBehavior::Reject;
+        }
+        self.update_cost(|current| Self::add_cost(current, cost))
+    }
+
+    fn on_update(
+        &self,
+        _cache: &LruCache<K, V, impl Limiter<K, V, S>, S>,
+        old_key: &K,
+        old_value: &V,
+        new_key: Option<&K>,
+        new_value: Option<&V>,
+    ) -> AddBehavior {
+        let mut prev_cost = 0;
+        let mut next_cost = 0;
+        if let Some(new_key) = new_key {
+            prev_cost += self.cost_func.key_cost(old_key);
+            next_cost += self.cost_func.key_cost(new_key);
+        }
+        if let Some(new_value) = new_value {
+            prev_cost += self.cost_func.value_cost(old_value);
+            next_cost += self.cost_func.value_cost(new_value);
+        }
+        self.update_cost(|current| Self::add_cost(Self::sub_cost(current, prev_cost), next_cost))
+    }
+
+    fn on_remove(&self, _cache: &LruCache<K, V, impl Limiter<K, V, S>, S>, key: &K, value: &V) {
+        let cost = self.cost_func.key_cost(key) + self.cost_func.value_cost(value);
+        self.update_cost(|current| Self::sub_cost(current, cost));
+    }
+}
+
 /// A trait for implementing "keys" into an LruCache entry. Used to customize how to get a ref for
 /// lookup. Note that implementing this trait only allows entry lookup. To support insertion as
 /// well, see `InsertionKey`.
@@ -258,13 +634,20 @@ enum OccupiedExtra<K, V, Q> {
 }
 
 /// A view into an occupied entry in an `LruCache`. It is part of the `Entry` enum.
-pub struct OccupiedEntry<'a, K, V, Q = OwnedKey<K>, S = DefaultHasher> {
-    cache: &'a mut LruCache<K, V, S>,
+pub struct OccupiedEntry<
+    'a,
+    K: Hash + Eq,
+    V,
+    Q = OwnedKey<K>,
+    L: Limiter<K, V, S> = SizeLimited,
+    S: BuildHasher = DefaultHasher,
+> {
+    cache: &'a mut LruCache<K, V, L, S>,
     node: NonNull<LruEntry<K, V>>,
     extra: OccupiedExtra<K, V, Q>,
 }
 
-impl<'a, K, V, Q, S> OccupiedEntry<'a, K, V, Q, S> {
+impl<'a, K: Hash + Eq, V, Q, L: Limiter<K, V, S>, S: BuildHasher> OccupiedEntry<'a, K, V, Q, L, S> {
     /// Gets a reference to the key in the entry.
     ///
     /// # Example
@@ -296,7 +679,7 @@ impl<'a, K, V, Q, S> OccupiedEntry<'a, K, V, Q, S> {
     /// cache.entry(1).or_insert("a");
     /// if let Entry::Occupied(entry) = cache.entry(1) {
     ///     assert_eq!(entry.peek(), &"a");
-    /// }
+    /// };
     /// ```
     pub fn peek(&self) -> &V {
         unsafe { self.node.as_ref().val.assume_init_ref() }
@@ -316,7 +699,7 @@ impl<'a, K, V, Q, S> OccupiedEntry<'a, K, V, Q, S> {
     ///     assert_eq!(entry.peek(), &1);
     ///     *entry.peek_mut() *= 2;
     ///     assert_eq!(entry.peek(), &2);
-    /// }
+    /// };
     /// ```
     pub fn peek_mut(&mut self) -> &mut V {
         unsafe { self.node.as_mut().val.assume_init_mut() }
@@ -343,9 +726,7 @@ impl<'a, K, V, Q, S> OccupiedEntry<'a, K, V, Q, S> {
     pub fn into_peek(mut self) -> &'a mut V {
         unsafe { self.node.as_mut().val.assume_init_mut() }
     }
-}
 
-impl<'a, K: Hash + Eq, V, Q, S: BuildHasher> OccupiedEntry<'a, K, V, Q, S> {
     /// Gets a reference to the value in the entry.
     ///
     /// # Example
@@ -357,7 +738,7 @@ impl<'a, K: Hash + Eq, V, Q, S: BuildHasher> OccupiedEntry<'a, K, V, Q, S> {
     /// cache.entry(1).or_insert("a");
     /// if let Entry::Occupied(mut entry) = cache.entry(1) {
     ///     assert_eq!(entry.get(), &"a");
-    /// }
+    /// };
     /// ```
     pub fn get(&mut self) -> &V {
         self.promote();
@@ -377,7 +758,7 @@ impl<'a, K: Hash + Eq, V, Q, S: BuildHasher> OccupiedEntry<'a, K, V, Q, S> {
     ///     assert_eq!(entry.get(), &1);
     ///     *entry.get_mut() *= 2;
     ///     assert_eq!(entry.get(), &2);
-    /// }
+    /// };
     /// ```
     pub fn get_mut(&mut self) -> &mut V {
         self.promote();
@@ -493,7 +874,7 @@ impl<'a, K: Hash + Eq, V, Q, S: BuildHasher> OccupiedEntry<'a, K, V, Q, S> {
     /// if let Entry::Occupied(entry) = cache.entry(2) {
     ///     let entry = entry.next().unwrap();
     ///     assert_eq!(entry.key(), &1);
-    /// }
+    /// };
     /// ```
     pub fn next(self) -> Result<Self, Self> {
         let node = unsafe { NonNull::new_unchecked(self.node.as_ref().next) };
@@ -515,7 +896,7 @@ impl<'a, K: Hash + Eq, V, Q, S: BuildHasher> OccupiedEntry<'a, K, V, Q, S> {
     /// if let Entry::Occupied(entry) = cache.entry(2) {
     ///     let entry = entry.prev().unwrap();
     ///     assert_eq!(entry.key(), &3);
-    /// }
+    /// };
     /// ```
     pub fn prev(self) -> Result<Self, Self> {
         let node = unsafe { NonNull::new_unchecked(self.node.as_ref().prev) };
@@ -535,10 +916,38 @@ impl<'a, K: Hash + Eq, V, Q, S: BuildHasher> OccupiedEntry<'a, K, V, Q, S> {
     /// if let Entry::Occupied(mut entry) = cache.entry(1) {
     ///     assert_eq!(entry.insert("b"), "a");
     ///     assert_eq!(entry.get(), &"b");
-    /// }
+    /// };
     /// ```
     pub fn insert(&mut self, value: V) -> V {
-        replace(self.get_mut(), value)
+        self.try_insert(value)
+            .unwrap_or_else(|_| panic!("Cache does not have sufficient capacity"))
+    }
+
+    /// Trys to set the value of the entry, and returns the entry’s old value. If the new entry is
+    /// rejected by the limiter, returns the rejected value as an `Result::Err`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::{Entry, LruCache};
+    /// let mut cache = LruCache::new(3);
+    ///
+    /// cache.put(1, "a");
+    ///
+    /// if let Entry::Occupied(mut entry) = cache.entry(1) {
+    ///     assert_eq!(entry.try_insert("b"), Ok("a"));
+    ///     assert_eq!(entry.get(), &"b");
+    /// };
+    /// ```
+    pub fn try_insert(&mut self, value: V) -> Result<V, V> {
+        let behavior =
+            self.cache
+                .limiter
+                .on_update(self.cache, self.key(), self.peek(), None, Some(&value));
+        if behavior == AddBehavior::Reject {
+            return Err(value);
+        }
+        Ok(replace(self.get_mut(), value))
     }
 
     /// Takes the value out of the entry, and returns it.
@@ -567,6 +976,9 @@ impl<'a, K: Hash + Eq, V, Q, S: BuildHasher> OccupiedEntry<'a, K, V, Q, S> {
         let removed = self.cache.map.remove(KeyWrapper::from_ref(key));
         debug_assert!(removed);
         self.cache.detach(self.node.as_ptr());
+        self.cache
+            .limiter
+            .on_remove(self.cache, self.key(), self.peek());
         // prevent automatic evictions by setting the extra to Key
         self.extra = OccupiedExtra::Key(None);
         self.node
@@ -599,6 +1011,8 @@ impl<'a, K: Hash + Eq, V, Q, S: BuildHasher> OccupiedEntry<'a, K, V, Q, S> {
     /// that this entry was not created by insertion, did not evict another entry, or was already
     /// taken.
     ///
+    /// Any evicted entries which remain untaken when the entry is dropped will be dropped.
+    ///
     /// # Example
     ///
     /// ```
@@ -610,16 +1024,46 @@ impl<'a, K: Hash + Eq, V, Q, S: BuildHasher> OccupiedEntry<'a, K, V, Q, S> {
     ///
     /// let mut entry = cache.entry(3).insert("c");
     /// assert_eq!(entry.take_evicted(), Some((1, "a")));
+    /// assert_eq!(entry.take_evicted(), None);
     /// ```
     pub fn take_evicted(&mut self) -> Option<(K, V)> {
         match &mut self.extra {
-            OccupiedExtra::Key(_) => None,
-            OccupiedExtra::Evicted(evicted) => evicted.take(),
+            OccupiedExtra::Key(_) => return None,
+            OccupiedExtra::Evicted(evicted) => {
+                if let Some(evicted) = evicted.take() {
+                    return Some(evicted);
+                }
+            }
         }
+        #[allow(clippy::never_loop)]
+        'fuse: loop {
+            if self.cache.limiter.is_oversized(self.cache) {
+                let mut other = match self.cache.entry_lru() {
+                    // limiter is reporting oversized on an empty cache, bail out
+                    None => break 'fuse,
+                    Some(other) => other,
+                };
+                if other.node == self.node {
+                    // tried to evict ourself! never allow that, just move to next entry
+                    other = match other.next() {
+                        Ok(other) => other,
+                        // no other entries left, just bail out
+                        Err(_) => break 'fuse,
+                    }
+                }
+                return Some(other.remove_entry());
+            }
+            break 'fuse;
+        }
+        // switch to the key extra so we behave like a fused iterator
+        self.extra = OccupiedExtra::Key(None);
+        None
     }
 }
 
-impl<'a, K: Hash + Eq, V, Q: InsertionKey<K>, S: BuildHasher> OccupiedEntry<'a, K, V, Q, S> {
+impl<'a, K: Hash + Eq, V, Q: InsertionKey<K>, L: Limiter<K, V, S>, S: BuildHasher>
+    OccupiedEntry<'a, K, V, Q, L, S>
+{
     /// Replaces the key in the hash map with the key used to create this entry. Panics if the
     /// key was already consumed by insertion.
     ///
@@ -641,15 +1085,56 @@ impl<'a, K: Hash + Eq, V, Q: InsertionKey<K>, S: BuildHasher> OccupiedEntry<'a, 
     ///     entry.replace_key();
     ///     assert_eq!(Rc::strong_count(&str1), 1);
     ///     assert_eq!(Rc::strong_count(&str2), 2);
-    /// }
+    /// };
     /// ```
-    pub fn replace_key(mut self) -> K {
+    pub fn replace_key(self) -> K {
+        self.try_replace_key()
+            .unwrap_or_else(|_| panic!("Cache does not have sufficient capacity"))
+    }
+
+    fn get_key_for_replace(&mut self) -> K {
         let key = match &mut self.extra {
             OccupiedExtra::Key(key) => key.take(),
             OccupiedExtra::Evicted(_) => None,
         };
         let key = key.expect("Key was already consumed by insertion");
-        replace(self.key_mut(), Q::into_owned(key))
+        Q::into_owned(key)
+    }
+
+    /// Tries to replace the key in the cache with the key used to create this entry. Panics if the
+    /// key was already consumed by insertion. If the limiter rejects the update, returns the
+    /// rejected key.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::rc::Rc;
+    /// use lru::{Entry, LruCache};
+    /// let mut cache = LruCache::new(3);
+    ///
+    /// let str1 = Rc::new("abc".to_string());
+    /// let str2 = Rc::new("abc".to_string());
+    ///
+    /// cache.put(str1.clone(), 1);
+    ///
+    /// assert_eq!(Rc::strong_count(&str1), 2);
+    /// assert_eq!(Rc::strong_count(&str2), 1);
+    /// if let Entry::Occupied(mut entry) = cache.entry(str2.clone()) {
+    ///     entry.try_replace_key().unwrap();
+    ///     assert_eq!(Rc::strong_count(&str1), 1);
+    ///     assert_eq!(Rc::strong_count(&str2), 2);
+    /// };
+    /// ```
+    pub fn try_replace_key(mut self) -> Result<K, K> {
+        let key = self.get_key_for_replace();
+        let behavior =
+            self.cache
+                .limiter
+                .on_update(self.cache, self.key(), self.peek(), Some(&key), None);
+        if behavior == AddBehavior::Reject {
+            return Err(key);
+        }
+        Ok(replace(self.key_mut(), key))
     }
 
     /// Replaces the entry, returning the old key and value. The new key in the hash map will be
@@ -676,14 +1161,65 @@ impl<'a, K: Hash + Eq, V, Q: InsertionKey<K>, S: BuildHasher> OccupiedEntry<'a, 
     /// }
     /// assert_eq!(cache.get(&str1), Some(&5));
     /// ```
-    pub fn replace_entry(mut self, value: V) -> (K, V) {
-        let value = self.insert(value);
-        let key = self.replace_key();
-        (key, value)
+    pub fn replace_entry(self, value: V) -> (K, V) {
+        self.try_replace_entry(value)
+            .unwrap_or_else(|_| panic!("Cache does not have sufficient capacity"))
+    }
+
+    /// Tries to replace the entry, returning the old key and value. The new key in the hash map
+    /// will be the key used to create this entry. Panics if the key was already consumed by
+    /// insertion. If the limiter rejects the update, returns the rejected entry.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::rc::Rc;
+    /// use lru::{Entry, LruCache};
+    /// let mut cache = LruCache::new(3);
+    ///
+    /// let str1 = Rc::new("abc".to_string());
+    /// let str2 = Rc::new("abc".to_string());
+    ///
+    /// cache.put(str1.clone(), 1);
+    ///
+    /// assert_eq!(Rc::strong_count(&str1), 2);
+    /// assert_eq!(Rc::strong_count(&str2), 1);
+    /// if let Entry::Occupied(mut entry) = cache.entry(str2.clone()) {
+    ///     entry.try_replace_entry(5).unwrap();
+    ///     assert_eq!(Rc::strong_count(&str1), 1);
+    ///     assert_eq!(Rc::strong_count(&str2), 2);
+    /// }
+    /// assert_eq!(cache.get(&str1), Some(&5));
+    /// ```
+    pub fn try_replace_entry(mut self, value: V) -> Result<(K, V), (K, V)> {
+        let key = self.get_key_for_replace();
+        let behavior = self.cache.limiter.on_update(
+            self.cache,
+            self.key(),
+            self.peek(),
+            Some(&key),
+            Some(&value),
+        );
+        if behavior == AddBehavior::Reject {
+            return Err((key, value));
+        }
+        let key = replace(self.key_mut(), key);
+        let value = replace(self.get_mut(), value);
+        Ok((key, value))
     }
 }
 
-impl<'a, K: Debug, V: Debug, Q, S> Debug for OccupiedEntry<'a, K, V, Q, S> {
+impl<'a, K: Hash + Eq, V, Q, L: Limiter<K, V, S>, S: BuildHasher> Drop
+    for OccupiedEntry<'a, K, V, Q, L, S>
+{
+    fn drop(&mut self) {
+        while self.take_evicted().is_some() {}
+    }
+}
+
+impl<'a, K: Hash + Eq + Debug, V: Debug, Q, L: Limiter<K, V, S>, S: BuildHasher> Debug
+    for OccupiedEntry<'a, K, V, Q, L, S>
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("OccupiedEntry")
             .field("key", self.key())
@@ -693,12 +1229,12 @@ impl<'a, K: Debug, V: Debug, Q, S> Debug for OccupiedEntry<'a, K, V, Q, S> {
 }
 
 /// A view into a vacant entry in an `LruCache`. It is part of the `Entry` enum.
-pub struct VacantEntry<'a, K, V, Q = OwnedKey<K>, S = DefaultHasher> {
-    cache: &'a mut LruCache<K, V, S>,
+pub struct VacantEntry<'a, K, V, Q = OwnedKey<K>, L = SizeLimited, S = DefaultHasher> {
+    cache: &'a mut LruCache<K, V, L, S>,
     key: Q,
 }
 
-impl<'a, K, V, Q: Key, S> VacantEntry<'a, K, V, Q, S> {
+impl<'a, K, V, Q: Key, L, S> VacantEntry<'a, K, V, Q, L, S> {
     /// Gets a reference to the key that would be used when inserting a value through the
     /// VacantEntry.
     ///
@@ -724,14 +1260,16 @@ impl<'a, K, V, Q: Key, S> VacantEntry<'a, K, V, Q, S> {
     ///
     /// if let Entry::Vacant(entry) = cache.entry(1) {
     ///     assert_eq!(entry.into_key(), OwnedKey(1));
-    /// }
+    /// };
     /// ```
     pub fn into_key(self) -> Q {
         self.key
     }
 }
 
-impl<'a, K: Hash + Eq, V, Q: InsertionKey<K>, S: BuildHasher> VacantEntry<'a, K, V, Q, S> {
+impl<'a, K: Hash + Eq, V, Q: InsertionKey<K>, L: Limiter<K, V, S>, S: BuildHasher>
+    VacantEntry<'a, K, V, Q, L, S>
+{
     /// Sets the value of the entry with the `VacantEntry`’s key, and returns a mutable reference to
     /// it.
     ///
@@ -763,9 +1301,9 @@ impl<'a, K: Hash + Eq, V, Q: InsertionKey<K>, S: BuildHasher> VacantEntry<'a, K,
     /// }
     /// assert_eq!(cache.get(&1), Some(&"a"));
     /// ```
-    pub fn insert_entry(self, value: V) -> OccupiedEntry<'a, K, V, Q, S> {
+    pub fn insert_entry(self, value: V) -> OccupiedEntry<'a, K, V, Q, L, S> {
         self.try_insert_entry(value)
-            .unwrap_or_else(|_| panic!("Cache has zero capacity"))
+            .unwrap_or_else(|_| panic!("Cache does not have sufficient capacity"))
     }
 
     /// Trys to set the value of the entry with the `VacantEntry`’s key, and returns a mutable
@@ -789,7 +1327,7 @@ impl<'a, K: Hash + Eq, V, Q: InsertionKey<K>, S: BuildHasher> VacantEntry<'a, K,
     /// if let Entry::Vacant(entry) = cache.entry(2) {
     ///     let res = entry.try_insert("b");
     ///     assert_eq!(res, Err((2, "b")));
-    /// }
+    /// };
     /// ```
     pub fn try_insert(self, value: V) -> Result<&'a mut V, (K, V)> {
         Ok(self.try_insert_entry(value)?.into_mut())
@@ -816,30 +1354,33 @@ impl<'a, K: Hash + Eq, V, Q: InsertionKey<K>, S: BuildHasher> VacantEntry<'a, K,
     /// if let Entry::Vacant(entry) = cache.entry(4) {
     ///     let res = entry.try_insert_entry("d");
     ///     assert_eq!(res.unwrap_err(), (4, "d"));
-    /// }
+    /// };
     /// ```
-    pub fn try_insert_entry(self, value: V) -> Result<OccupiedEntry<'a, K, V, Q, S>, (K, V)> {
+    #[allow(clippy::type_complexity)]
+    pub fn try_insert_entry(self, value: V) -> Result<OccupiedEntry<'a, K, V, Q, L, S>, (K, V)> {
         let key = Q::into_owned(self.key);
         let (node, evicted) = {
-            if self.cache.len() == self.cache.cap() {
-                if self.cache.cap() == 0 {
-                    return Err((key, value));
+            let behavior = self.cache.limiter.on_add(self.cache, &key, &value);
+            match behavior {
+                AddBehavior::Reject => return Err((key, value)),
+                AddBehavior::Evict if !self.cache.is_empty() => {
+                    // if the cache is full, remove the last entry so we can use it for the new key
+                    let entry = unsafe { self.cache.entry_lru().unwrap_unchecked() };
+                    let mut node = entry.remove_node();
+                    let key = replace(unsafe { node.as_mut().key.assume_init_mut() }, key);
+                    let value = replace(unsafe { node.as_mut().val.assume_init_mut() }, value);
+                    let evicted = Some((key, value));
+                    (node, evicted)
                 }
-                // if the cache is full, remove the last entry so we can use it for the new key
-                let entry = unsafe { self.cache.entry_lru().unwrap_unchecked() };
-                let mut node = entry.remove_node();
-                let key = replace(unsafe { node.as_mut().key.assume_init_mut() }, key);
-                let value = replace(unsafe { node.as_mut().val.assume_init_mut() }, value);
-                let evicted = Some((key, value));
-                (node, evicted)
-            } else {
-                let node = unsafe {
-                    NonNull::new_unchecked(Box::into_raw(Box::new(LruEntry::new(key, value))))
-                };
-                if self.cache.len() == 0 {
-                    self.cache.alloc_root();
+                _ => {
+                    let node = unsafe {
+                        NonNull::new_unchecked(Box::into_raw(Box::new(LruEntry::new(key, value))))
+                    };
+                    if self.cache.is_empty() {
+                        self.cache.alloc_root();
+                    }
+                    (node, None)
                 }
-                (node, None)
             }
         };
         self.cache.attach(node.as_ptr());
@@ -852,7 +1393,7 @@ impl<'a, K: Hash + Eq, V, Q: InsertionKey<K>, S: BuildHasher> VacantEntry<'a, K,
     }
 }
 
-impl<'a, K, V, Q: Key, S> Debug for VacantEntry<'a, K, V, Q, S>
+impl<'a, K, V, Q: Key, L, S> Debug for VacantEntry<'a, K, V, Q, L, S>
 where
     Q::Key: Debug,
 {
@@ -867,14 +1408,23 @@ where
 ///
 /// This `enum` is constructed from the `LruCache::entry`/`LruCache::entry_ref` methods on
 /// `LruCache`.
-pub enum Entry<'a, K, V, Q = OwnedKey<K>, S = DefaultHasher> {
+pub enum Entry<
+    'a,
+    K: Hash + Eq,
+    V,
+    Q = OwnedKey<K>,
+    L: Limiter<K, V, S> = SizeLimited,
+    S: BuildHasher = DefaultHasher,
+> {
     /// An occupied entry.
-    Occupied(OccupiedEntry<'a, K, V, Q, S>),
+    Occupied(OccupiedEntry<'a, K, V, Q, L, S>),
     /// A vacant entry.
-    Vacant(VacantEntry<'a, K, V, Q, S>),
+    Vacant(VacantEntry<'a, K, V, Q, L, S>),
 }
 
-impl<'a, K: Borrow<Q::Key>, V, Q: Key, S> Entry<'a, K, V, Q, S> {
+impl<'a, K: Hash + Eq + Borrow<Q::Key>, V, Q: Key, L: Limiter<K, V, S>, S: BuildHasher>
+    Entry<'a, K, V, Q, L, S>
+{
     /// Returns a reference to this entry's key.
     ///
     /// # Example
@@ -893,7 +1443,9 @@ impl<'a, K: Borrow<Q::Key>, V, Q: Key, S> Entry<'a, K, V, Q, S> {
     }
 }
 
-impl<'a, K: Hash + Eq, V, Q: InsertionKey<K>, S: BuildHasher> Entry<'a, K, V, Q, S> {
+impl<'a, K: Hash + Eq, V, Q: InsertionKey<K>, L: Limiter<K, V, S>, S: BuildHasher>
+    Entry<'a, K, V, Q, L, S>
+{
     /// Sets the value of the entry, and returns an `OccupiedEntry`.
     ///
     /// # Example
@@ -907,13 +1459,33 @@ impl<'a, K: Hash + Eq, V, Q: InsertionKey<K>, S: BuildHasher> Entry<'a, K, V, Q,
     /// entry.remove();
     /// assert!(cache.is_empty());
     /// ```
-    pub fn insert(self, value: V) -> OccupiedEntry<'a, K, V, Q, S> {
+    pub fn insert(self, value: V) -> OccupiedEntry<'a, K, V, Q, L, S> {
+        self.try_insert(value)
+            .unwrap_or_else(|_| panic!("Cache does not have sufficient capacity"))
+    }
+
+    /// Tries to sets the value of the entry, and returns an `OccupiedEntry`. If the new entry/value
+    /// is rejected by the limiter, returns the rejected entry as an `Result::Err`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::new(2);
+    ///
+    /// let entry = cache.entry(1).try_insert("a").unwrap();
+    /// assert_eq!(entry.key(), &1);
+    /// entry.remove();
+    /// assert!(cache.is_empty());
+    /// ```
+    #[allow(clippy::type_complexity)]
+    pub fn try_insert(self, value: V) -> Result<OccupiedEntry<'a, K, V, Q, L, S>, (Option<K>, V)> {
         match self {
             Entry::Occupied(mut entry) => {
-                entry.insert(value);
-                entry
+                entry.try_insert(value).map_err(|v| (None, v))?;
+                Ok(entry)
             }
-            Entry::Vacant(entry) => entry.insert_entry(value),
+            Entry::Vacant(entry) => entry.try_insert_entry(value).map_err(|(k, v)| (Some(k), v)),
         }
     }
 
@@ -1009,7 +1581,9 @@ impl<'a, K: Hash + Eq, V, Q: InsertionKey<K>, S: BuildHasher> Entry<'a, K, V, Q,
     }
 }
 
-impl<'a, K: Hash + Eq, V: Default, Q: InsertionKey<K>, S: BuildHasher> Entry<'a, K, V, Q, S> {
+impl<'a, K: Hash + Eq, V: Default, Q: InsertionKey<K>, L: Limiter<K, V, S>, S: BuildHasher>
+    Entry<'a, K, V, Q, L, S>
+{
     /// Ensures a value is in the entry by inserting the default value if empty, and returns a
     /// mutable reference to the value in the entry.
     ///
@@ -1027,7 +1601,8 @@ impl<'a, K: Hash + Eq, V: Default, Q: InsertionKey<K>, S: BuildHasher> Entry<'a,
     }
 }
 
-impl<'a, K: Debug, V: Debug, Q: Key, S> Debug for Entry<'a, K, V, Q, S>
+impl<'a, K: Hash + Eq + Debug, V: Debug, Q: Key, L: Limiter<K, V, S>, S: BuildHasher> Debug
+    for Entry<'a, K, V, Q, L, S>
 where
     Q::Key: Debug,
 {
@@ -1040,15 +1615,15 @@ where
 }
 
 /// An LRU Cache
-pub struct LruCache<K, V, S = DefaultHasher> {
+pub struct LruCache<K, V, L = SizeLimited, S = DefaultHasher> {
     map: HashSet<EntryWrapper<K, V>, S>,
-    cap: usize,
+    limiter: L,
 
     // root is a sigil node to facilitate inserting entries
     root: Option<NonNull<LruEntry<K, V>>>,
 }
 
-impl<K: Hash + Eq, V> LruCache<K, V> {
+impl<K: Hash + Eq, V> LruCache<K, V, SizeLimited> {
     /// Creates a new LRU Cache that holds at most `cap` items.
     ///
     /// # Example
@@ -1058,23 +1633,25 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     /// let mut cache: LruCache<isize, &str> = LruCache::new(10);
     /// ```
     pub fn new(cap: usize) -> LruCache<K, V> {
-        LruCache::construct(cap, HashSet::with_capacity(cap))
+        LruCache::construct(SizeLimited::new(cap), HashSet::with_capacity(cap))
     }
+}
 
+impl<K: Hash + Eq, V> LruCache<K, V, Unlimited> {
     /// Creates a new LRU Cache that never automatically evicts items.
     ///
     /// # Example
     ///
     /// ```
-    /// use lru::LruCache;
-    /// let mut cache: LruCache<isize, &str> = LruCache::unbounded();
+    /// use lru::{LruCache, Unlimited};
+    /// let mut cache: LruCache<isize, &str, Unlimited> = LruCache::unbounded();
     /// ```
-    pub fn unbounded() -> LruCache<K, V> {
-        LruCache::construct(usize::MAX, HashSet::default())
+    pub fn unbounded() -> LruCache<K, V, Unlimited> {
+        LruCache::construct(Unlimited, HashSet::default())
     }
 }
 
-impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
+impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, SizeLimited, S> {
     /// Creates a new LRU Cache that holds at most `cap` items and
     /// uses the provided hash builder to hash keys.
     ///
@@ -1086,30 +1663,111 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// let s = DefaultHasher::default();
     /// let mut cache: LruCache<isize, &str> = LruCache::with_hasher(10, s);
     /// ```
-    pub fn with_hasher(cap: usize, hash_builder: S) -> LruCache<K, V, S> {
-        LruCache::construct(cap, HashSet::with_capacity_and_hasher(cap, hash_builder))
+    pub fn with_hasher(cap: usize, hash_builder: S) -> LruCache<K, V, SizeLimited, S> {
+        LruCache::construct(
+            SizeLimited::new(cap),
+            HashSet::with_capacity_and_hasher(cap, hash_builder),
+        )
     }
 
+    /// Returns the maximum number of key-value pairs the cache can hold.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// use std::num::NonZeroUsize;
+    /// let mut cache: LruCache<isize, &str> = LruCache::new(2);
+    /// assert_eq!(cache.cap(), 2);
+    /// ```
+    pub fn cap(&self) -> usize {
+        self.limiter.limit()
+    }
+
+    /// Resizes the cache. If the new capacity is smaller than the size of the current
+    /// cache any entries past the new capacity are discarded.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// use std::num::NonZeroUsize;
+    /// let mut cache: LruCache<isize, &str> = LruCache::new(2);
+    ///
+    /// cache.put(1, "a");
+    /// cache.put(2, "b");
+    /// cache.resize(4);
+    /// cache.put(3, "c");
+    /// cache.put(4, "d");
+    ///
+    /// assert_eq!(cache.len(), 4);
+    /// assert_eq!(cache.get(&1), Some(&"a"));
+    /// assert_eq!(cache.get(&2), Some(&"b"));
+    /// assert_eq!(cache.get(&3), Some(&"c"));
+    /// assert_eq!(cache.get(&4), Some(&"d"));
+    /// ```
+    pub fn resize(&mut self, cap: usize) {
+        // return early if capacity doesn't change
+        if cap == self.limiter.limit() {
+            return;
+        }
+        self.limiter_mut().set_limit(cap);
+        self.shrink_to_fit();
+    }
+}
+
+impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, Unlimited, S> {
     /// Creates a new LRU Cache that never automatically evicts items and
     /// uses the provided hash builder to hash keys.
     ///
     /// # Example
     ///
     /// ```
-    /// use lru::{LruCache, DefaultHasher};
+    /// use lru::{LruCache, DefaultHasher, Unlimited};
     ///
     /// let s = DefaultHasher::default();
-    /// let mut cache: LruCache<isize, &str> = LruCache::unbounded_with_hasher(s);
+    /// let mut cache: LruCache<isize, &str, Unlimited> = LruCache::unbounded_with_hasher(s);
     /// ```
-    pub fn unbounded_with_hasher(hash_builder: S) -> LruCache<K, V, S> {
-        LruCache::construct(usize::MAX, HashSet::with_hasher(hash_builder))
+    pub fn unbounded_with_hasher(hash_builder: S) -> LruCache<K, V, Unlimited, S> {
+        LruCache::construct(Unlimited, HashSet::with_hasher(hash_builder))
+    }
+}
+
+impl<K: Hash + Eq, V, L: Limiter<K, V, DefaultHasher>> LruCache<K, V, L> {
+    /// Creates a new LRU Cache with the given limiter.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::{LruCache, SizeLimited};
+    /// let mut cache = LruCache::<usize, usize>::with_limiter(SizeLimited::new(10));
+    /// ```
+    pub fn with_limiter(limiter: L) -> LruCache<K, V, L> {
+        LruCache::construct(limiter, HashSet::default())
+    }
+}
+
+impl<K: Hash + Eq, V, L: Limiter<K, V, S>, S: BuildHasher> LruCache<K, V, L, S> {
+    /// Creates a new LRU Cache with the given limiter and uses the provided hash builder to hash
+    /// keys.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::{LruCache, DefaultHasher, SizeLimited};
+    ///
+    /// let s = DefaultHasher::default();
+    /// let mut cache = LruCache::<usize, usize>::with_limiter_and_hasher(SizeLimited::new(10), s);
+    /// ```
+    pub fn with_limiter_and_hasher(limiter: L, hash_builder: S) -> LruCache<K, V, L, S> {
+        LruCache::construct(limiter, HashSet::with_hasher(hash_builder))
     }
 
     /// Creates a new LRU Cache with the given capacity.
-    fn construct(cap: usize, map: HashSet<EntryWrapper<K, V>, S>) -> LruCache<K, V, S> {
+    fn construct(limiter: L, map: HashSet<EntryWrapper<K, V>, S>) -> LruCache<K, V, L, S> {
         LruCache {
             map,
-            cap,
+            limiter,
             root: None,
         }
     }
@@ -1127,7 +1785,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// assert_eq!(cache.get(&1), Some(&"a"));
     /// assert_eq!(cache.get(&2), Some(&""))
     /// ```
-    pub fn entry(&mut self, k: K) -> Entry<K, V, OwnedKey<K>, S> {
+    pub fn entry(&mut self, k: K) -> Entry<K, V, OwnedKey<K>, L, S> {
         self.entry_for(OwnedKey(k))
     }
 
@@ -1147,7 +1805,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     pub fn entry_ref<'a, 'b, Q: ?Sized + Hash + Eq>(
         &'a mut self,
         k: &'b Q,
-    ) -> Entry<'a, K, V, BorrowedKey<'b, Q>, S>
+    ) -> Entry<'a, K, V, BorrowedKey<'b, Q>, L, S>
     where
         K: Borrow<Q>,
     {
@@ -1170,7 +1828,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// assert_eq!(cache.entry_lru().unwrap().get(), &"a");
     /// assert_eq!(cache.entry_lru().unwrap().get(), &"");
     /// ```
-    pub fn entry_lru(&mut self) -> Option<OccupiedEntry<K, V, BorrowedKey<K>, S>> {
+    pub fn entry_lru(&mut self) -> Option<OccupiedEntry<K, V, BorrowedKey<K>, L, S>> {
         if self.is_empty() {
             return None;
         }
@@ -1182,7 +1840,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         })
     }
 
-    pub fn entry_for<Q>(&mut self, k: Q) -> Entry<K, V, Q, S>
+    pub fn entry_for<Q>(&mut self, k: Q) -> Entry<K, V, Q, L, S>
     where
         Q: Key,
         K: Borrow<Q::Key>,
@@ -1721,52 +2379,76 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         self.map.len() == 0
     }
 
-    /// Returns the maximum number of key-value pairs the cache can hold.
+    /// Gets a reference to the cache's limiter.
     ///
     /// # Example
     ///
     /// ```
     /// use lru::LruCache;
-    /// let mut cache: LruCache<isize, &str> = LruCache::new(2);
-    /// assert_eq!(cache.cap(), 2);
+    /// let cache = LruCache::<usize, usize>::new(10);
+    /// assert_eq!(cache.cap(), cache.limiter().limit());
     /// ```
-    pub fn cap(&self) -> usize {
-        self.cap
+    pub fn limiter(&self) -> &L {
+        &self.limiter
     }
 
-    /// Resizes the cache. If the new capacity is smaller than the size of the current
-    /// cache any entries past the new capacity are discarded.
+    /// Gets a mutable reference to the cache's limiter. The actual reference is wrapped in a
+    /// deref-able guard which handles automatically updating the cache if the limiter's limit
+    /// changes.
     ///
     /// # Example
     ///
     /// ```
     /// use lru::LruCache;
-    /// let mut cache: LruCache<isize, &str> = LruCache::new(2);
-    ///
-    /// cache.put(1, "a");
-    /// cache.put(2, "b");
-    /// cache.resize(4);
-    /// cache.put(3, "c");
-    /// cache.put(4, "d");
-    ///
-    /// assert_eq!(cache.len(), 4);
-    /// assert_eq!(cache.get(&1), Some(&"a"));
-    /// assert_eq!(cache.get(&2), Some(&"b"));
-    /// assert_eq!(cache.get(&3), Some(&"c"));
-    /// assert_eq!(cache.get(&4), Some(&"d"));
+    /// let mut cache = LruCache::new(2);
+    /// cache.put(1, 1);
+    /// cache.put(2, 2);
+    /// cache.limiter_mut().set_limit(1);
+    /// assert_eq!(cache.len(), 1);
     /// ```
-    pub fn resize(&mut self, cap: usize) {
-        // return early if capacity doesn't change
-        if cap == self.cap {
-            return;
+    pub fn limiter_mut(&mut self) -> impl '_ + DerefMut<Target = L> {
+        struct Guard<'a, K: Hash + Eq, V, L: Limiter<K, V, S>, S: BuildHasher>(
+            &'a mut LruCache<K, V, L, S>,
+        );
+
+        impl<'a, K: Hash + Eq, V, L: Limiter<K, V, S>, S: BuildHasher> Deref for Guard<'a, K, V, L, S> {
+            type Target = L;
+
+            fn deref(&self) -> &Self::Target {
+                &self.0.limiter
+            }
         }
 
-        while self.map.len() > cap {
-            self.pop_lru();
+        impl<'a, K: Hash + Eq, V, L: Limiter<K, V, S>, S: BuildHasher> DerefMut for Guard<'a, K, V, L, S> {
+            fn deref_mut(&mut self) -> &mut Self::Target {
+                &mut self.0.limiter
+            }
         }
+
+        impl<'a, K: Hash + Eq, V, L: Limiter<K, V, S>, S: BuildHasher> Drop for Guard<'a, K, V, L, S> {
+            fn drop(&mut self) {
+                while self.0.limiter.is_oversized(self.0) {
+                    self.0.pop_lru();
+                }
+            }
+        }
+
+        Guard(self)
+    }
+
+    /// Shrinks the capacity of the cache as much as possible. This will not evict any entries.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// let mut cache = LruCache::new(2);
+    /// cache.put(1, 1);
+    /// cache.put(2, 2);
+    /// cache.shrink_to_fit();
+    /// ```
+    pub fn shrink_to_fit(&mut self) {
         self.map.shrink_to_fit();
-
-        self.cap = cap;
     }
 
     /// Clears the contents of the cache.
@@ -1891,7 +2573,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     }
 }
 
-impl<K, V, S> Drop for LruCache<K, V, S> {
+impl<K, V, L, S> Drop for LruCache<K, V, L, S> {
     fn drop(&mut self) {
         self.map.drain().for_each(|node| unsafe {
             let mut node = *Box::from_raw(node.0.as_ptr());
@@ -1907,7 +2589,9 @@ impl<K, V, S> Drop for LruCache<K, V, S> {
     }
 }
 
-impl<'a, K: Hash + Eq, V, S: BuildHasher> IntoIterator for &'a LruCache<K, V, S> {
+impl<'a, K: Hash + Eq, V, L: Limiter<K, V, S>, S: BuildHasher> IntoIterator
+    for &'a LruCache<K, V, L, S>
+{
     type Item = (&'a K, &'a V);
     type IntoIter = Iter<'a, K, V>;
 
@@ -1916,7 +2600,9 @@ impl<'a, K: Hash + Eq, V, S: BuildHasher> IntoIterator for &'a LruCache<K, V, S>
     }
 }
 
-impl<'a, K: Hash + Eq, V, S: BuildHasher> IntoIterator for &'a mut LruCache<K, V, S> {
+impl<'a, K: Hash + Eq, V, L: Limiter<K, V, S>, S: BuildHasher> IntoIterator
+    for &'a mut LruCache<K, V, L, S>
+{
     type Item = (&'a K, &'a mut V);
     type IntoIter = IterMut<'a, K, V>;
 
@@ -1928,14 +2614,16 @@ impl<'a, K: Hash + Eq, V, S: BuildHasher> IntoIterator for &'a mut LruCache<K, V
 // The compiler does not automatically derive Send and Sync for LruCache because it contains
 // raw pointers. The raw pointers are safely encapsulated by LruCache though so we can
 // implement Send and Sync for it below.
-unsafe impl<K: Send, V: Send, S: Send> Send for LruCache<K, V, S> {}
-unsafe impl<K: Sync, V: Sync, S: Sync> Sync for LruCache<K, V, S> {}
+unsafe impl<K: Send, V: Send, L: Send, S: Send> Send for LruCache<K, V, L, S> {}
+unsafe impl<K: Sync, V: Sync, L: Sync, S: Sync> Sync for LruCache<K, V, L, S> {}
 
-impl<K: Hash + Eq, V> fmt::Debug for LruCache<K, V> {
+impl<K: Hash + Eq, V, L: Limiter<K, V, S> + Debug, S: BuildHasher> fmt::Debug
+    for LruCache<K, V, L, S>
+{
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("LruCache")
             .field("len", &self.len())
-            .field("cap", &self.cap())
+            .field("limiter", &self.limiter())
             .finish()
     }
 }
@@ -2131,9 +2819,11 @@ impl<K: Hash + Eq, V> IntoIterator for LruCache<K, V> {
 
 #[cfg(test)]
 mod tests {
-    use super::LruCache;
+    use super::{AddBehavior, CostLimited, Limiter, LruCache, SizeLimited};
     use core::fmt::Debug;
     use scoped_threadpool::Pool;
+    use std::cell::RefCell;
+    use std::hash::Hash;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn assert_opt_eq<V: PartialEq + Debug>(opt: Option<&V>, v: V) {
@@ -2895,6 +3585,193 @@ mod tests {
         assert_eq!(cache.push(1, 1), Some((1, 1)));
         assert_eq!(cache.try_get_or_insert(2, || 2), Err((2, 2)));
         assert_eq!(cache.try_get_or_insert_mut(3, || 3), Err((3, 3)));
+    }
+
+    #[test]
+    fn test_size_limiter() {
+        let mut cache = LruCache::new(2);
+        cache.put(1, 1);
+        cache.put(2, 2);
+        assert_eq!(cache.push(3, 3), Some((1, 1)));
+        let _ = cache.pop_lru();
+        assert_eq!(cache.push(4, 4), None);
+        assert_eq!(cache.push(5, 5), Some((3, 3)));
+    }
+
+    #[test]
+    fn test_unlimited_limiter() {
+        let mut cache = LruCache::unbounded();
+        for i in 0..1000 {
+            cache.put(i, i);
+        }
+        assert_eq!(cache.len(), 1000);
+    }
+
+    struct TraceLimited<L> {
+        pub limiter: L,
+        adds: RefCell<usize>,
+        updates: RefCell<usize>,
+        removes: RefCell<usize>,
+    }
+
+    impl<L> TraceLimited<L> {
+        pub fn new(limiter: L) -> Self {
+            Self {
+                limiter,
+                adds: RefCell::new(0),
+                updates: RefCell::new(0),
+                removes: RefCell::new(0),
+            }
+        }
+
+        pub fn reset(&mut self) -> (usize, usize, usize) {
+            (
+                self.adds.replace(0),
+                self.updates.replace(0),
+                self.removes.replace(0),
+            )
+        }
+    }
+
+    impl<K: Hash + Eq, V, L: Limiter<K, V, S>, S> Limiter<K, V, S> for TraceLimited<L> {
+        fn is_oversized(&self, cache: &LruCache<K, V, impl Limiter<K, V, S>, S>) -> bool {
+            self.limiter.is_oversized(cache)
+        }
+
+        fn on_add(
+            &self,
+            cache: &LruCache<K, V, impl Limiter<K, V, S>, S>,
+            key: &K,
+            value: &V,
+        ) -> AddBehavior {
+            *self.adds.borrow_mut() += 1;
+            self.limiter.on_add(cache, key, value)
+        }
+
+        fn on_update(
+            &self,
+            cache: &LruCache<K, V, impl Limiter<K, V, S>, S>,
+            old_key: &K,
+            old_value: &V,
+            new_key: Option<&K>,
+            new_value: Option<&V>,
+        ) -> AddBehavior {
+            *self.updates.borrow_mut() += 1;
+            self.limiter
+                .on_update(cache, old_key, old_value, new_key, new_value)
+        }
+
+        fn on_remove(&self, cache: &LruCache<K, V, impl Limiter<K, V, S>, S>, key: &K, value: &V) {
+            *self.removes.borrow_mut() += 1;
+            self.limiter.on_remove(cache, key, value)
+        }
+    }
+
+    #[test]
+    fn test_limit_put() {
+        let mut cache = LruCache::with_limiter(TraceLimited::new(SizeLimited::new(1)));
+        cache.put(0, 0);
+        assert_eq!(cache.limiter_mut().reset(), (1, 0, 0));
+        cache.put(1, 1);
+        assert_eq!(cache.limiter_mut().reset(), (1, 0, 1));
+        cache.put(1, 2);
+        assert_eq!(cache.limiter_mut().reset(), (0, 1, 0));
+    }
+
+    #[test]
+    fn test_limit_push() {
+        let mut cache = LruCache::with_limiter(TraceLimited::new(SizeLimited::new(1)));
+        cache.push(0, 0);
+        assert_eq!(cache.limiter_mut().reset(), (1, 0, 0));
+        cache.push(1, 1);
+        assert_eq!(cache.limiter_mut().reset(), (1, 0, 1));
+        cache.push(1, 2);
+        assert_eq!(cache.limiter_mut().reset(), (0, 1, 0));
+    }
+
+    #[test]
+    fn test_limit_get_or_insert() {
+        let mut cache = LruCache::with_limiter(TraceLimited::new(SizeLimited::new(1)));
+        cache.get_or_insert(0, || 0);
+        assert_eq!(cache.limiter_mut().reset(), (1, 0, 0));
+        cache.get_or_insert(0, || 0);
+        assert_eq!(cache.limiter_mut().reset(), (0, 0, 0));
+        cache.get_or_insert(1, || 1);
+        assert_eq!(cache.limiter_mut().reset(), (1, 0, 1));
+    }
+
+    #[test]
+    fn test_limit_get_or_insert_mut() {
+        let mut cache = LruCache::with_limiter(TraceLimited::new(SizeLimited::new(1)));
+        cache.get_or_insert_mut(0, || 0);
+        assert_eq!(cache.limiter_mut().reset(), (1, 0, 0));
+        cache.get_or_insert_mut(0, || 0);
+        assert_eq!(cache.limiter_mut().reset(), (0, 0, 0));
+        cache.get_or_insert_mut(1, || 1);
+        assert_eq!(cache.limiter_mut().reset(), (1, 0, 1));
+    }
+
+    #[test]
+    fn test_limit_pop() {
+        let mut cache = LruCache::with_limiter(TraceLimited::new(SizeLimited::new(1)));
+        cache.pop(&0);
+        assert_eq!(cache.limiter_mut().reset(), (0, 0, 0));
+        cache.push(0, 0);
+        cache.limiter_mut().reset();
+        cache.pop(&1);
+        assert_eq!(cache.limiter_mut().reset(), (0, 0, 0));
+        cache.pop(&0);
+        assert_eq!(cache.limiter_mut().reset(), (0, 0, 1));
+        cache.pop(&0);
+        assert_eq!(cache.limiter_mut().reset(), (0, 0, 0));
+    }
+
+    #[test]
+    fn test_limit_pop_entry() {
+        let mut cache = LruCache::with_limiter(TraceLimited::new(SizeLimited::new(1)));
+        cache.pop_entry(&0);
+        assert_eq!(cache.limiter_mut().reset(), (0, 0, 0));
+        cache.push(0, 0);
+        cache.limiter_mut().reset();
+        cache.pop_entry(&1);
+        assert_eq!(cache.limiter_mut().reset(), (0, 0, 0));
+        cache.pop_entry(&0);
+        assert_eq!(cache.limiter_mut().reset(), (0, 0, 1));
+        cache.pop_entry(&0);
+        assert_eq!(cache.limiter_mut().reset(), (0, 0, 0));
+    }
+
+    #[test]
+    fn test_limit_pop_lru() {
+        let mut cache = LruCache::with_limiter(TraceLimited::new(SizeLimited::new(1)));
+        cache.pop_lru();
+        assert_eq!(cache.limiter_mut().reset(), (0, 0, 0));
+        cache.push(0, 0);
+        cache.limiter_mut().reset();
+        cache.pop_lru();
+        assert_eq!(cache.limiter_mut().reset(), (0, 0, 1));
+        cache.pop_lru();
+        assert_eq!(cache.limiter_mut().reset(), (0, 0, 0));
+    }
+
+    #[test]
+    fn test_cost_limited() {
+        let mut cache = LruCache::with_limiter(CostLimited::with_func(
+            10,
+            (|_key: &usize| 0, |value: &usize| *value),
+        ));
+        for i in 0..5 {
+            cache.put(i, i);
+        }
+        assert_eq!(cache.len(), 5);
+        {
+            let mut entry = cache.entry(10).insert(10);
+            for i in 0..5 {
+                assert_eq!(entry.take_evicted(), Some((i, i)));
+            }
+            assert_eq!(entry.take_evicted(), None);
+        }
+        assert_eq!(cache.len(), 1);
     }
 }
 
