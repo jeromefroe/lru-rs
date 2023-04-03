@@ -820,6 +820,29 @@ impl<K: Hash + Eq, V, S: BuildHasher, A: Clone + Allocator> LruCache<K, V, S, A>
         self.cur_epoch = epoch;
     }
 
+    /// Update the current epoch. The given epoch should be greater than the current epoch.
+    pub fn pop_lru_by_epoch(&mut self, epoch: Epoch) -> Option<(K, V)> {
+        let node = unsafe { (*self.tail).prev };
+        let node_epoch = unsafe { (*node).epoch };
+        if node_epoch < epoch {
+            if node != self.head {
+                let old_key = KeyRef {
+                    k: unsafe { &(*(*(*self.tail).prev).key.as_ptr()) },
+                };
+                let mut old_node = self.map.remove(&old_key).unwrap();
+                let node_ptr: *mut LruEntry<K, V> = &mut *old_node;
+                self.detach(node_ptr);
+                let LruEntry { key, val, .. } = *old_node;
+                unsafe { Some((key.assume_init(), val.assume_init())) }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Evict entries by given epoch
     pub fn evict_by_epoch(&mut self, epoch: Epoch) {
         loop {
             if self.is_empty() {
@@ -1572,6 +1595,37 @@ mod tests {
         assert_eq!(cache.get(&4), Some(&"d"));
 
         cache.evict_by_epoch(2);
+        assert_eq!(cache.len(), 0);
+        assert!(cache.get(&3).is_none());
+        assert!(cache.get(&4).is_none());
+    }
+    
+    #[test]
+    fn test_pop_lru_by_epoch() {
+        let mut cache = LruCache::new(4);
+
+        cache.put(1, "a");
+        cache.put(2, "b");
+
+        cache.update_epoch(1);
+
+        cache.put(3, "c");
+        cache.put(4, "d");
+
+        assert_eq!(cache.pop_lru_by_epoch(1), Some((1, "a")));
+        assert_eq!(cache.pop_lru_by_epoch(1), Some((2, "b")));
+        assert_eq!(cache.pop_lru_by_epoch(1), None);
+        assert_eq!(cache.pop_lru_by_epoch(1), None);
+
+        assert_eq!(cache.len(), 2);
+        assert!(cache.get(&1).is_none());
+        assert!(cache.get(&2).is_none());
+        assert_eq!(cache.get(&3), Some(&"c"));
+        assert_eq!(cache.get(&4), Some(&"d"));
+
+        assert_eq!(cache.pop_lru_by_epoch(2), Some((3, "c")));
+        assert_eq!(cache.pop_lru_by_epoch(2), Some((4, "d")));
+
         assert_eq!(cache.len(), 0);
         assert!(cache.get(&3).is_none());
         assert!(cache.get(&4).is_none());
