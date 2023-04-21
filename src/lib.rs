@@ -820,6 +820,10 @@ impl<K: Hash + Eq, V, S: BuildHasher, A: Clone + Allocator> LruCache<K, V, S, A>
         self.cur_epoch = epoch;
     }
 
+    pub fn current_epoch(&self) -> Epoch {
+        self.cur_epoch
+    }
+
     /// Update the current epoch. The given epoch should be greater than the current epoch.
     pub fn pop_lru_by_epoch(&mut self, epoch: Epoch) -> Option<(K, V)> {
         let node = unsafe { (*self.tail).prev };
@@ -1599,7 +1603,7 @@ mod tests {
         assert!(cache.get(&3).is_none());
         assert!(cache.get(&4).is_none());
     }
-    
+
     #[test]
     fn test_pop_lru_by_epoch() {
         let mut cache = LruCache::new(4);
