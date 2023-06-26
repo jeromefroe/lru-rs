@@ -1448,6 +1448,17 @@ mod tests {
     }
 
     #[test]
+    fn test_try_get_or_insert() {
+        let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+
+        assert_eq!(cache.try_get_or_insert::<_, &str>("apple", || Ok("red")), Ok(&"red"));
+        assert_eq!(cache.try_get_or_insert::<_, &str>("apple", || Err("failed")), Ok(&"red"));
+        assert_eq!(cache.try_get_or_insert::<_, &str>("banana", || Ok("orange")), Ok(&"orange"));
+        assert_eq!(cache.try_get_or_insert::<_, &str>("lemon", || Err("failed")), Err("failed"));
+        assert_eq!(cache.try_get_or_insert::<_, &str>("banana", || Err("failed")), Ok(&"orange"));
+    }
+
+    #[test]
     fn test_put_and_get_or_insert_mut() {
         let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
         assert!(cache.is_empty());
