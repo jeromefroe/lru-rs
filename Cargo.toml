@@ -1,6 +1,6 @@
 [package]
 name = "lru"
-version = "0.10.0"
+version = "0.10.1"
 authors = ["Jerome Froelich <jeromefroelic@hotmail.com>"]
 categories = ["caching", "no-std"]
 description = "A LRU cache implementation"
