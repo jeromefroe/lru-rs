@@ -64,7 +64,7 @@ extern crate hashbrown;
 #[cfg(test)]
 extern crate scoped_threadpool;
 
-use alloc::borrow::Borrow;
+use alloc::borrow::{Borrow, BorrowMut};
 use alloc::boxed::Box;
 use core::fmt;
 use core::hash::{BuildHasher, Hash, Hasher};
@@ -137,6 +137,43 @@ where
     fn borrow(&self) -> &KeyWrapper<Q> {
         let key = unsafe { &*self.k }.borrow();
         KeyWrapper::from_ref(key)
+    }
+}
+
+enum ValueWrapper<'a, V> {
+    Borrowed(&'a V),
+    Owned(V),
+}
+
+impl<'a, V> Borrow<V> for ValueWrapper<'a, V> {
+    fn borrow(&self) -> &V {
+        match self {
+            Self::Borrowed(v) => v,
+            Self::Owned(v) => v,
+        }
+    }
+}
+
+enum ValueWrapperMut<'a, V> {
+    Borrowed(&'a mut V),
+    Owned(V),
+}
+
+impl<'a, V> Borrow<V> for ValueWrapperMut<'a, V> {
+    fn borrow(&self) -> &V {
+        match self {
+            Self::Borrowed(v) => v,
+            Self::Owned(v) => v,
+        }
+    }
+}
+
+impl<'a, V> BorrowMut<V> for ValueWrapperMut<'a, V> {
+    fn borrow_mut(&mut self) -> &mut V {
+        match self {
+            Self::Borrowed(v) => v,
+            Self::Owned(v) => v,
+        }
     }
 }
 
@@ -464,6 +501,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     ///
     /// ```
     /// use lru::LruCache;
+    /// use std::borrow::Borrow;
     /// let mut cache = LruCache::new(2);
     ///
     /// cache.put(1, "a");
@@ -471,12 +509,12 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// cache.put(2, "c");
     /// cache.put(3, "d");
     ///
-    /// assert_eq!(cache.get_or_insert(2, ||"a"), Some(&"c"));
-    /// assert_eq!(cache.get_or_insert(3, ||"a"), Some(&"d"));
-    /// assert_eq!(cache.get_or_insert(1, ||"a"), Some(&"a"));
-    /// assert_eq!(cache.get_or_insert(1, ||"b"), Some(&"a"));
+    /// assert_eq!(cache.get_or_insert(2, ||"a").borrow(), &"c");
+    /// assert_eq!(cache.get_or_insert(3, ||"a").borrow(), &"d");
+    /// assert_eq!(cache.get_or_insert(1, ||"a").borrow(), &"a");
+    /// assert_eq!(cache.get_or_insert(1, ||"b").borrow(), &"a");
     /// ```
-    pub fn get_or_insert<'a, F>(&'a mut self, k: K, f: F) -> Option<&'a V>
+    pub fn get_or_insert<'a, F>(&'a mut self, k: K, f: F) -> impl Borrow<V> + 'a
     where
         F: FnOnce() -> V,
     {
@@ -486,14 +524,12 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             self.detach(node_ptr);
             self.attach(node_ptr);
 
-            Some(unsafe { &*(*node_ptr).val.as_ptr() })
+            ValueWrapper::Borrowed(unsafe { &*(*node_ptr).val.as_ptr() })
         } else {
-            // If the capacity is 0 we do nothing,
-            // this is the only circumstance that should return None
-            if self.cap() == 0 {
-                return None;
-            }
             let v = f();
+            if self.cap() == 0 {
+                return ValueWrapper::Owned(v);
+            }
             let (_, node) = self.replace_or_create_node(k, v);
             let node_ptr: *mut LruEntry<K, V> = node.as_ptr();
 
@@ -501,7 +537,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
 
             let keyref = unsafe { (*node_ptr).key.as_ptr() };
             self.map.insert(KeyRef { k: keyref }, node);
-            Some(unsafe { &*(*node_ptr).val.as_ptr() })
+            ValueWrapper::Borrowed(unsafe { &*(*node_ptr).val.as_ptr() })
         }
     }
 
@@ -515,6 +551,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     ///
     /// ```
     /// use lru::LruCache;
+    /// use std::borrow::Borrow;
     /// let mut cache = LruCache::new(2);
     ///
     /// cache.put(1, "a");
@@ -525,13 +562,13 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// let f = ||->Result<&str, String> {Err("failed".to_owned())};
     /// let a = ||->Result<&str, String> {Ok("a")};
     /// let b = ||->Result<&str, String> {Ok("b")};
-    /// assert_eq!(cache.try_get_or_insert(2, a), Ok(Some(&"c")));
-    /// assert_eq!(cache.try_get_or_insert(3, a), Ok(Some(&"d")));
-    /// assert_eq!(cache.try_get_or_insert(1, f), Err("failed".to_owned()));
-    /// assert_eq!(cache.try_get_or_insert(1, b), Ok(Some(&"b")));
-    /// assert_eq!(cache.try_get_or_insert(1, a), Ok(Some(&"b")));
+    /// assert_eq!(cache.try_get_or_insert(2, a).unwrap().borrow(), &"c");
+    /// assert_eq!(cache.try_get_or_insert(3, a).unwrap().borrow(), &"d");
+    /// assert_eq!(cache.try_get_or_insert(1, f).err(), Some("failed".to_owned()));
+    /// assert_eq!(cache.try_get_or_insert(1, b).unwrap().borrow(), &"b");
+    /// assert_eq!(cache.try_get_or_insert(1, a).unwrap().borrow(), &"b");
     /// ```
-    pub fn try_get_or_insert<F, E>(&mut self, k: K, f: F) -> Result<Option<&V>, E>
+    pub fn try_get_or_insert<'a, F, E>(&'a mut self, k: K, f: F) -> Result<impl Borrow<V> + 'a, E>
     where
         F: FnOnce() -> Result<V, E>,
     {
@@ -541,13 +578,15 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             self.detach(node_ptr);
             self.attach(node_ptr);
 
-            Ok(Some(unsafe { &*(*node_ptr).val.as_ptr() }))
+            Ok(ValueWrapper::Borrowed(unsafe {
+                &*(*node_ptr).val.as_ptr()
+            }))
         } else {
             match f() {
                 Err(e) => Err(e),
                 Ok(v) => {
                     if self.cap() == 0 {
-                        return Ok(None);
+                        return Ok(ValueWrapper::Owned(v));
                     }
                     let (_, node) = self.replace_or_create_node(k, v);
                     let node_ptr: *mut LruEntry<K, V> = node.as_ptr();
@@ -556,7 +595,9 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
 
                     let keyref = unsafe { (*node_ptr).key.as_ptr() };
                     self.map.insert(KeyRef { k: keyref }, node);
-                    Ok(Some(unsafe { &*(*node_ptr).val.as_ptr() }))
+                    Ok(ValueWrapper::Borrowed(unsafe {
+                        &*(*node_ptr).val.as_ptr()
+                    }))
                 }
             }
         }
@@ -571,19 +612,21 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     ///
     /// ```
     /// use lru::LruCache;
+    /// use std::borrow::BorrowMut;
     /// let mut cache = LruCache::new(2);
     ///
     /// cache.put(1, "a");
     /// cache.put(2, "b");
     ///
-    /// let v = cache.get_or_insert_mut(2, ||"c");
-    /// assert_eq!(v, Some(&mut "b"));
-    /// *v.unwrap() = "d";
-    /// assert_eq!(cache.get_or_insert_mut(2, ||"e"), Some(&mut "d"));
-    /// assert_eq!(cache.get_or_insert_mut(3, ||"f"), Some(&mut "f"));
-    /// assert_eq!(cache.get_or_insert_mut(3, ||"e"), Some(&mut "f"));
+    /// let mut v = cache.get_or_insert_mut(2, ||"c");
+    /// assert_eq!(v.borrow_mut(), &mut "b");
+    /// *v.borrow_mut() = "d";
+    /// drop(v);
+    /// assert_eq!(cache.get_or_insert_mut(2, ||"e").borrow_mut(), &mut "d");
+    /// assert_eq!(cache.get_or_insert_mut(3, ||"f").borrow_mut(), &mut "f");
+    /// assert_eq!(cache.get_or_insert_mut(3, ||"e").borrow_mut(), &mut "f");
     /// ```
-    pub fn get_or_insert_mut<'a, F>(&'a mut self, k: K, f: F) -> Option<&'a mut V>
+    pub fn get_or_insert_mut<'a, F>(&'a mut self, k: K, f: F) -> impl BorrowMut<V> + 'a
     where
         F: FnOnce() -> V,
     {
@@ -593,11 +636,11 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             self.detach(node_ptr);
             self.attach(node_ptr);
 
-            Some(unsafe { &mut *(*node_ptr).val.as_mut_ptr() })
+            ValueWrapperMut::Borrowed(unsafe { &mut *(*node_ptr).val.as_mut_ptr() })
         } else {
             let v = f();
             if self.cap() == 0 {
-                return None;
+                return ValueWrapperMut::Owned(v);
             }
             let (_, node) = self.replace_or_create_node(k, v);
             let node_ptr: *mut LruEntry<K, V> = node.as_ptr();
@@ -606,7 +649,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
 
             let keyref = unsafe { (*node_ptr).key.as_ptr() };
             self.map.insert(KeyRef { k: keyref }, node);
-            Some(unsafe { &mut *(*node_ptr).val.as_mut_ptr() })
+            ValueWrapperMut::Borrowed(unsafe { &mut *(*node_ptr).val.as_mut_ptr() })
         }
     }
 
@@ -1341,6 +1384,7 @@ impl<K: Hash + Eq, V> IntoIterator for LruCache<K, V> {
 #[cfg(test)]
 mod tests {
     use super::LruCache;
+    use alloc::borrow::{Borrow, BorrowMut};
     use core::fmt::Debug;
     use scoped_threadpool::Pool;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1424,10 +1468,16 @@ mod tests {
         assert_eq!(cache.cap(), 2);
         assert_eq!(cache.len(), 2);
         assert!(!cache.is_empty());
-        assert_opt_eq(cache.get_or_insert("apple", || "orange"), &"red");
-        assert_opt_eq(cache.get_or_insert("banana", || "orange"), &"yellow");
-        assert_opt_eq(cache.get_or_insert("lemon", || "orange"), &"orange");
-        assert_opt_eq(cache.get_or_insert("lemon", || "red"), &"orange");
+        assert_eq!(cache.get_or_insert("apple", || "orange").borrow(), &"red");
+        assert_eq!(
+            cache.get_or_insert("banana", || "orange").borrow(),
+            &"yellow"
+        );
+        assert_eq!(
+            cache.get_or_insert("lemon", || "orange").borrow(),
+            &"orange"
+        );
+        assert_eq!(cache.get_or_insert("lemon", || "red").borrow(), &"orange");
     }
 
     #[test]
@@ -1435,24 +1485,38 @@ mod tests {
         let mut cache = LruCache::new(2);
 
         assert_eq!(
-            cache.try_get_or_insert::<_, &str>("apple", || Ok("red")),
-            Ok(Some(&"red"))
+            cache
+                .try_get_or_insert::<_, &str>("apple", || Ok("red"))
+                .unwrap()
+                .borrow(),
+            &"red"
         );
         assert_eq!(
-            cache.try_get_or_insert::<_, &str>("apple", || Err("failed")),
-            Ok(Some(&"red"))
+            cache
+                .try_get_or_insert::<_, &str>("apple", || Err("failed"))
+                .unwrap()
+                .borrow(),
+            &"red"
         );
         assert_eq!(
-            cache.try_get_or_insert::<_, &str>("banana", || Ok("orange")),
-            Ok(Some(&"orange"))
+            cache
+                .try_get_or_insert::<_, &str>("banana", || Ok("orange"))
+                .unwrap()
+                .borrow(),
+            &"orange"
         );
         assert_eq!(
-            cache.try_get_or_insert::<_, &str>("lemon", || Err("failed")),
-            Err("failed")
+            cache
+                .try_get_or_insert::<_, &str>("lemon", || Err("failed"))
+                .err(),
+            Some("failed")
         );
         assert_eq!(
-            cache.try_get_or_insert::<_, &str>("banana", || Err("failed")),
-            Ok(Some(&"orange"))
+            cache
+                .try_get_or_insert::<_, &str>("banana", || Err("failed"))
+                .unwrap()
+                .borrow(),
+            &"orange"
         );
     }
 
@@ -1467,25 +1531,27 @@ mod tests {
         assert_eq!(cache.cap(), 2);
         assert_eq!(cache.len(), 2);
 
-        let v = cache.get_or_insert_mut("apple", || "orange");
-        assert_eq!(v, Some(&mut "red"));
-        *v.unwrap() = "blue";
+        {
+            let mut v = cache.get_or_insert_mut("apple", || "orange");
+            assert_eq!(v.borrow_mut(), &mut "red");
+            *v.borrow_mut() = "blue";
+        }
 
         assert_eq!(
-            cache.get_or_insert_mut("apple", || "orange"),
-            Some(&mut "blue")
+            cache.get_or_insert_mut("apple", || "orange").borrow_mut(),
+            &mut "blue"
         );
         assert_eq!(
-            cache.get_or_insert_mut("banana", || "orange"),
-            Some(&mut "yellow")
+            cache.get_or_insert_mut("banana", || "orange").borrow_mut(),
+            &mut "yellow"
         );
         assert_eq!(
-            cache.get_or_insert_mut("lemon", || "orange"),
-            Some(&mut "orange")
+            cache.get_or_insert_mut("lemon", || "orange").borrow_mut(),
+            &mut "orange"
         );
         assert_eq!(
-            cache.get_or_insert_mut("lemon", || "red"),
-            Some(&mut "orange")
+            cache.get_or_insert_mut("lemon", || "red").borrow_mut(),
+            &mut "orange"
         );
     }
 
