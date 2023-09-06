@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.11.1](https://github.com/jeromefroe/lru-rs/tree/0.11.1) - 2023-09-05
+
+- Add `try_get_or_insert_mut` method.
+
 ## [v0.11.0](https://github.com/jeromefroe/lru-rs/tree/0.11.0) - 2023-07-11
 
 - Update dependency on hashbrown to 0.14 and update MSRV to 1.64.0.
