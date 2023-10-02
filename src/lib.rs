@@ -1203,7 +1203,7 @@ impl<'a, K: Hash + Eq, V, S: BuildHasher> IntoIterator for &'a mut LruCache<K, V
 unsafe impl<K: Send, V: Send, S: Send> Send for LruCache<K, V, S> {}
 unsafe impl<K: Sync, V: Sync, S: Sync> Sync for LruCache<K, V, S> {}
 
-impl<K: Hash + Eq, V> fmt::Debug for LruCache<K, V> {
+impl<K: Hash + Eq, V, S: BuildHasher> fmt::Debug for LruCache<K, V, S> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("LruCache")
             .field("len", &self.len())
