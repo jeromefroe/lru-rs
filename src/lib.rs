@@ -633,7 +633,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// assert_eq!(cache.try_get_or_insert_mut(4, b), Ok(&mut "b"));
     /// assert_eq!(cache.try_get_or_insert_mut(4, a), Ok(&mut "b"));
     /// ```
-    pub fn try_get_or_insert_mut<'a, F, E>(&mut self, k: K, f: F) -> Result<&'a mut V, E>
+    pub fn try_get_or_insert_mut<'a, F, E>(&'a mut self, k: K, f: F) -> Result<&'a mut V, E>
     where
         F: FnOnce() -> Result<V, E>,
     {
