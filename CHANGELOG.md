@@ -1,5 +1,10 @@
 # Changelog
 
+## [v0.12.0](https://github.com/jeromefroe/lru-rs/tree/0.12.0) - 2023-10-03
+
+- Add lifetime specifier to `try_get_or_insert_mut`.
+- Add `BuildHasher` trait bound to `Debug` for `LruCache`.
+
 ## [v0.11.1](https://github.com/jeromefroe/lru-rs/tree/0.11.1) - 2023-09-05
 
 - Add `try_get_or_insert_mut` method.
