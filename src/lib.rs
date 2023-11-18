@@ -462,6 +462,42 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         }
     }
 
+    /// Returns a key-value references pair of the key in the cache or `None` if it is not
+    /// present in the cache. Moves the key to the head of the LRU list if it exists.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// use std::num::NonZeroUsize;
+    /// let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+    ///
+    /// cache.put(String::from("1"), "a");
+    /// cache.put(String::from("2"), "b");
+    /// cache.put(String::from("2"), "c");
+    /// cache.put(String::from("3"), "d");
+    ///
+    /// assert_eq!(cache.get_key_value("1"), None);
+    /// assert_eq!(cache.get_key_value("2"), Some((&String::from("2"), &"c")));
+    /// assert_eq!(cache.get_key_value("3"), Some((&String::from("3"), &"d")));
+    /// ```
+    pub fn get_key_value<'a, Q>(&'a mut self, k: &Q) -> Option<(&'a K, &'a V)>
+        where
+            K: Borrow<Q>,
+            Q: Hash + Eq + ?Sized,
+    {
+        if let Some(node) = self.map.get_mut(KeyWrapper::from_ref(k)) {
+            let node_ptr: *mut LruEntry<K, V> = node.as_ptr();
+
+            self.detach(node_ptr);
+            self.attach(node_ptr);
+
+            Some(unsafe { (&*(*node_ptr).key.as_ptr(), &*(*node_ptr).val.as_ptr()) })
+        } else {
+            None
+        }
+    }
+
     /// Returns a reference to the value of the key in the cache if it is
     /// present in the cache and moves the key to the head of the LRU list.
     /// If the key does not exist the provided `FnOnce` is used to populate
