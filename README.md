@@ -1,6 +1,6 @@
 # LRU Cache
 
-[![Travis Badge]][build status]
+[![Build Badge]][build status]
 [![Codecov Badge]][coverage status]
 [![crates.io Badge]][crates.io package]
 [![docs.rs Badge]][docs.rs documentation]
@@ -49,8 +49,8 @@ fn main() {
 }
 ```
 
-[travis badge]: https://travis-ci.org/jeromefroe/lru-rs.svg?branch=master
-[build status]: https://travis-ci.org/jeromefroe/lru-rs
+[build badge]: https://github.com/jeromefroe/lru-rs/actions/workflows/main.yml/badge.svg
+[build status]: https://github.com/jeromefroe/lru-rs/actions/workflows/main.yml
 [codecov badge]: https://codecov.io/gh/jeromefroe/lru-rs/branch/master/graph/badge.svg
 [coverage status]: https://codecov.io/gh/jeromefroe/lru-rs
 [crates.io badge]: https://img.shields.io/crates/v/lru.svg
