@@ -98,6 +98,10 @@ impl<K: Hash> Hash for KeyRef<K> {
 }
 
 impl<K: PartialEq> PartialEq for KeyRef<K> {
+    // NB: The unconditional_recursion lint was added in 1.76.0 and can be removed
+    // once the current stable version of Rust is 1.76.0 or higher.
+    #![allow(unknown_lints)]
+    #[allow(clippy::unconditional_recursion)]
     fn eq(&self, other: &KeyRef<K>) -> bool {
         unsafe { (*self.k).eq(&*other.k) }
     }
@@ -124,6 +128,10 @@ impl<K: ?Sized + Hash> Hash for KeyWrapper<K> {
 }
 
 impl<K: ?Sized + PartialEq> PartialEq for KeyWrapper<K> {
+    // NB: The unconditional_recursion lint was added in 1.76.0 and can be removed
+    // once the current stable version of Rust is 1.76.0 or higher.
+    #![allow(unknown_lints)]
+    #[allow(clippy::unconditional_recursion)]
     fn eq(&self, other: &Self) -> bool {
         self.0.eq(&other.0)
     }
