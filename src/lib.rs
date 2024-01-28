@@ -186,6 +186,22 @@ pub struct LruCache<K, V, S = DefaultHasher> {
     tail: *mut LruEntry<K, V>,
 }
 
+impl<K, V> Clone for LruCache<K, V>
+where
+    K: Hash + PartialEq + Eq + Clone,
+    V: Clone,
+{
+    fn clone(&self) -> Self {
+        let mut new_lru = LruCache::new(self.cap());
+
+        for (key, value) in self.iter().rev() {
+            new_lru.push(key.clone(), value.clone());
+        }
+
+        new_lru
+    }
+}
+
 impl<K: Hash + Eq, V> LruCache<K, V> {
     /// Creates a new LRU Cache that holds at most `cap` items.
     ///
@@ -2258,6 +2274,28 @@ mod tests {
             Some((&String::from("apple"), &"red"))
         );
         assert_eq!(cache.get_key_value("banana"), None);
+    }
+
+    #[test]
+    fn test_clone() {
+        let mut cache = LruCache::new(NonZeroUsize::new(3).unwrap());
+        cache.put("a", 1);
+        cache.put("b", 2);
+        cache.put("c", 3);
+
+        let mut cloned = cache.clone();
+
+        assert_eq!(cache.pop_lru(), Some(("a", 1)));
+        assert_eq!(cloned.pop_lru(), Some(("a", 1)));
+
+        assert_eq!(cache.pop_lru(), Some(("b", 2)));
+        assert_eq!(cloned.pop_lru(), Some(("b", 2)));
+
+        assert_eq!(cache.pop_lru(), Some(("c", 3)));
+        assert_eq!(cloned.pop_lru(), Some(("c", 3)));
+
+        assert_eq!(cache.pop_lru(), None);
+        assert_eq!(cloned.pop_lru(), None);
     }
 }
 
