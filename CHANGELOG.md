@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.12.2](https://github.com/jeromefroe/lru-rs/tree/0.12.2) - 2024-01-28
+
+- Add `clone` method.
+
 ## [v0.12.1](https://github.com/jeromefroe/lru-rs/tree/0.12.1) - 2023-11-21
 
 - Add `get_key_value` method.
