@@ -544,7 +544,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// assert_eq!(cache.get_or_insert(1, ||"a"), &"a");
     /// assert_eq!(cache.get_or_insert(1, ||"b"), &"a");
     /// ```
-    pub fn get_or_insert<'a, F>(&'a mut self, k: K, f: F) -> &'a V
+    pub fn get_or_insert<F>(&mut self, k: K, f: F) -> &V
     where
         F: FnOnce() -> V,
     {
@@ -641,7 +641,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// assert_eq!(cache.get_or_insert_mut(3, ||"f"), &mut "f");
     /// assert_eq!(cache.get_or_insert_mut(3, ||"e"), &mut "f");
     /// ```
-    pub fn get_or_insert_mut<'a, F>(&'a mut self, k: K, f: F) -> &'a mut V
+    pub fn get_or_insert_mut<F>(&mut self, k: K, f: F) -> &mut V
     where
         F: FnOnce() -> V,
     {
@@ -693,7 +693,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// assert_eq!(cache.try_get_or_insert_mut(4, b), Ok(&mut "b"));
     /// assert_eq!(cache.try_get_or_insert_mut(4, a), Ok(&mut "b"));
     /// ```
-    pub fn try_get_or_insert_mut<'a, F, E>(&'a mut self, k: K, f: F) -> Result<&'a mut V, E>
+    pub fn try_get_or_insert_mut<F, E>(&mut self, k: K, f: F) -> Result<&mut V, E>
     where
         F: FnOnce() -> Result<V, E>,
     {
@@ -788,7 +788,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     ///
     /// assert_eq!(cache.peek_lru(), Some((&1, &"a")));
     /// ```
-    pub fn peek_lru<'a>(&'a self) -> Option<(&'a K, &'a V)> {
+    pub fn peek_lru(&self) -> Option<(&K, &V)> {
         if self.is_empty() {
             return None;
         }
@@ -956,7 +956,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// cache.promote(&3);
     /// assert_eq!(cache.pop_lru(), Some((1, "a")));
     /// ```
-    pub fn promote<'a, Q>(&'a mut self, k: &Q)
+    pub fn promote<Q>(&mut self, k: &Q)
     where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
@@ -992,7 +992,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// assert_eq!(cache.pop_lru(), Some((1, "a")));
     /// assert_eq!(cache.pop_lru(), Some((2, "b")));
     /// ```
-    pub fn demote<'a, Q>(&'a mut self, k: &Q)
+    pub fn demote<Q>(&mut self, k: &Q)
     where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
