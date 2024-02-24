@@ -522,6 +522,50 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         }
     }
 
+    /// Returns a key-value references pair of the key in the cache or `None` if it is not
+    /// present in the cache. The reference to the value of the key is mutable. Moves the key to
+    /// the head of the LRU list if it exists.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// use std::num::NonZeroUsize;
+    /// let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+    ///
+    /// cache.put(1, "a");
+    /// cache.put(2, "b");
+    /// let (k, v) = cache.get_key_value_mut(&1).unwrap();
+    /// assert_eq!(k, &1);
+    /// assert_eq!(v, &mut "a");
+    /// *v = "aa";
+    /// cache.put(3, "c");
+    /// assert_eq!(cache.get_key_value(&2), None);
+    /// assert_eq!(cache.get_key_value(&1), Some((&1, &"aa")));
+    /// assert_eq!(cache.get_key_value(&3), Some((&3, &"c")));
+    /// ```
+    pub fn get_key_value_mut<'a, Q>(&'a mut self, k: &Q) -> Option<(&'a K, &'a mut V)>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        if let Some(node) = self.map.get_mut(KeyWrapper::from_ref(k)) {
+            let node_ptr: *mut LruEntry<K, V> = node.as_ptr();
+
+            self.detach(node_ptr);
+            self.attach(node_ptr);
+
+            Some(unsafe {
+                (
+                    &*(*node_ptr).key.as_ptr(),
+                    &mut *(*node_ptr).val.as_mut_ptr(),
+                )
+            })
+        } else {
+            None
+        }
+    }
+
     /// Returns a reference to the value of the key in the cache if it is
     /// present in the cache and moves the key to the head of the LRU list.
     /// If the key does not exist the provided `FnOnce` is used to populate
@@ -2280,6 +2324,27 @@ mod tests {
         assert_eq!(
             cache.get_key_value("apple"),
             Some((&String::from("apple"), &"red"))
+        );
+        assert_eq!(cache.get_key_value("banana"), None);
+    }
+
+    #[test]
+    fn test_get_key_value_mut() {
+        use alloc::string::String;
+
+        let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+
+        let key = String::from("apple");
+        cache.put(key, "red");
+
+        let (k, v) = cache.get_key_value_mut("apple").unwrap();
+        assert_eq!(k, &String::from("apple"));
+        assert_eq!(v, &mut "red");
+        *v = "green";
+
+        assert_eq!(
+            cache.get_key_value("apple"),
+            Some((&String::from("apple"), &"green"))
         );
         assert_eq!(cache.get_key_value("banana"), None);
     }
