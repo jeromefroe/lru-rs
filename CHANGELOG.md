@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.12.4](https://github.com/jeromefroe/lru-rs/tree/0.12.4) - 2024-07-30
+
+- Add methods that take a reference to the key that should be inserted.
+
 ## [v0.12.3](https://github.com/jeromefroe/lru-rs/tree/0.12.3) - 2024-02-24
 
 - Add `get_key_value_mut` method.
