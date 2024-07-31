@@ -74,7 +74,6 @@ use core::marker::PhantomData;
 use core::mem;
 use core::num::NonZeroUsize;
 use core::ptr::{self, NonNull};
-use core::usize;
 
 #[cfg(any(test, not(feature = "hashbrown")))]
 extern crate std;
