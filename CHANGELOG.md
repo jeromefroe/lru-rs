@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.12.5](https://github.com/jeromefroe/lru-rs/tree/0.12.5) - 2024-10-30
+
+- Upgrade hashbrown dependency to 0.15.
+
 ## [v0.12.4](https://github.com/jeromefroe/lru-rs/tree/0.12.4) - 2024-07-30
 
 - Add methods that take a reference to the key that should be inserted.
