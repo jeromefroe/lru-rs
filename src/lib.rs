@@ -179,7 +179,7 @@ impl<K, V> LruEntry<K, V> {
 }
 
 #[cfg(feature = "hashbrown")]
-pub type DefaultHasher = hashbrown::hash_map::DefaultHashBuilder;
+pub type DefaultHasher = hashbrown::DefaultHashBuilder;
 #[cfg(not(feature = "hashbrown"))]
 pub type DefaultHasher = std::collections::hash_map::RandomState;
 
@@ -1773,7 +1773,7 @@ mod tests {
     fn test_with_hasher() {
         use core::num::NonZeroUsize;
 
-        use hashbrown::hash_map::DefaultHashBuilder;
+        use hashbrown::DefaultHashBuilder;
 
         let s = DefaultHashBuilder::default();
         let mut cache = LruCache::with_hasher(NonZeroUsize::new(16).unwrap(), s);
