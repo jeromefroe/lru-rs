@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.13.0](https://github.com/jeromefroe/lru-rs/tree/0.13.0) - 2025-01-27
+
+- Add `peek_mru` and `pop_mru` methods, upgrade dependency on `hashbrown` to 0.15.2, and update MSRV to 1.65.0.
+
 ## [v0.12.5](https://github.com/jeromefroe/lru-rs/tree/0.12.5) - 2024-10-30
 
 - Upgrade hashbrown dependency to 0.15.
