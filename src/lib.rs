@@ -269,10 +269,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// let mut cache: LruCache<isize, &str> = LruCache::unbounded_with_hasher(s);
     /// ```
     pub fn unbounded_with_hasher(hash_builder: S) -> LruCache<K, V, S> {
-        LruCache::construct(
-            NonZeroUsize::MAX,
-            HashMap::with_hasher(hash_builder),
-        )
+        LruCache::construct(NonZeroUsize::MAX, HashMap::with_hasher(hash_builder))
     }
 
     /// Creates a new LRU Cache with the given capacity.
@@ -1502,7 +1499,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     fn remove_first(&mut self) -> Option<Box<LruEntry<K, V>>> {
         let next;
         unsafe { next = (*self.head).next }
-        if next != self.tail {
+        if !core::ptr::eq(next, self.tail) {
             let old_key = KeyRef {
                 k: unsafe { &(*(*(*self.head).next).key.as_ptr()) },
             };
@@ -1518,7 +1515,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     fn remove_last(&mut self) -> Option<Box<LruEntry<K, V>>> {
         let prev;
         unsafe { prev = (*self.tail).prev }
-        if prev != self.head {
+        if !core::ptr::eq(prev, self.head) {
             let old_key = KeyRef {
                 k: unsafe { &(*(*(*self.tail).prev).key.as_ptr()) },
             };
