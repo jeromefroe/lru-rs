@@ -233,7 +233,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     /// let mut cache: LruCache<isize, &str> = LruCache::unbounded();
     /// ```
     pub fn unbounded() -> LruCache<K, V> {
-        LruCache::construct(NonZeroUsize::new(usize::MAX).unwrap(), HashMap::default())
+        LruCache::construct(NonZeroUsize::MAX, HashMap::default())
     }
 }
 
@@ -270,7 +270,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// ```
     pub fn unbounded_with_hasher(hash_builder: S) -> LruCache<K, V, S> {
         LruCache::construct(
-            NonZeroUsize::new(usize::MAX).unwrap(),
+            NonZeroUsize::MAX,
             HashMap::with_hasher(hash_builder),
         )
     }
