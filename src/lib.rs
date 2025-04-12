@@ -269,10 +269,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// let mut cache: LruCache<isize, &str> = LruCache::unbounded_with_hasher(s);
     /// ```
     pub fn unbounded_with_hasher(hash_builder: S) -> LruCache<K, V, S> {
-        LruCache::construct(
-            NonZeroUsize::MAX,
-            HashMap::with_hasher(hash_builder),
-        )
+        LruCache::construct(NonZeroUsize::MAX, HashMap::with_hasher(hash_builder))
     }
 
     /// Creates a new LRU Cache with the given capacity.
