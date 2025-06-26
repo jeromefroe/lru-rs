@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.15.0](https://github.com/jeromefroe/lru-rs/tree/0.15.0) - 2025-06-26
+
+- Return bool from `promote` and `demote` to indicate whether key was found.
+
 ## [v0.14.0](https://github.com/jeromefroe/lru-rs/tree/0.14.0) - 2025-04-12
 
 - Use `NonZeroUsize::MAX` instead of `unwrap()`, and update MSRV to 1.70.0.
