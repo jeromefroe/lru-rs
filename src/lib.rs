@@ -1250,7 +1250,8 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         unsafe { Some((key.assume_init(), val.assume_init())) }
     }
 
-    /// Marks the key as the most recently used one.
+    /// Marks the key as the most recently used one. Returns true if the key
+    /// was promoted because it exists in the cache, false otherwise.
     ///
     /// # Example
     ///
@@ -1269,10 +1270,13 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// // assert_eq!(cache.pop_lru(), Some((3, "c")));
     ///
     /// // By promoting 3, we make sure it isn't popped.
-    /// cache.promote(&3);
+    /// assert!(cache.promote(&3));
     /// assert_eq!(cache.pop_lru(), Some((1, "a")));
+    ///
+    /// // Promoting an entry that doesn't exist doesn't do anything.
+    /// assert!(!cache.promote(&4));
     /// ```
-    pub fn promote<Q>(&mut self, k: &Q)
+    pub fn promote<Q>(&mut self, k: &Q) -> bool
     where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
@@ -1281,10 +1285,14 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             let node_ptr: *mut LruEntry<K, V> = node.as_ptr();
             self.detach(node_ptr);
             self.attach(node_ptr);
+            true
+        } else {
+            false
         }
     }
 
-    /// Marks the key as the least recently used one.
+    /// Marks the key as the least recently used one. Returns true if the key was demoted
+    /// because it exists in the cache, false otherwise.
     ///
     /// # Example
     ///
@@ -1303,12 +1311,15 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// // assert_eq!(cache.pop_lru(), Some((3, "c")));
     ///
     /// // By demoting 1 and 2, we make sure those are popped first.
-    /// cache.demote(&2);
-    /// cache.demote(&1);
+    /// assert!(cache.demote(&2));
+    /// assert!(cache.demote(&1));
     /// assert_eq!(cache.pop_lru(), Some((1, "a")));
     /// assert_eq!(cache.pop_lru(), Some((2, "b")));
+    ///
+    /// // Demoting a key that doesn't exist does nothing.
+    /// assert!(!cache.demote(&4));
     /// ```
-    pub fn demote<Q>(&mut self, k: &Q)
+    pub fn demote<Q>(&mut self, k: &Q) -> bool
     where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
@@ -1317,6 +1328,9 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             let node_ptr: *mut LruEntry<K, V> = node.as_ptr();
             self.detach(node_ptr);
             self.attach_last(node_ptr);
+            true
+        } else {
+            false
         }
     }
 
