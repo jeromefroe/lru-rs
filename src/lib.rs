@@ -193,13 +193,17 @@ pub struct LruCache<K, V, S = DefaultHasher> {
     tail: *mut LruEntry<K, V>,
 }
 
-impl<K, V> Clone for LruCache<K, V>
+impl<K, V, S> Clone for LruCache<K, V, S>
 where
     K: Hash + PartialEq + Eq + Clone,
     V: Clone,
+    S: BuildHasher + Clone,
 {
     fn clone(&self) -> Self {
-        let mut new_lru = LruCache::new(self.cap());
+        let mut new_lru = LruCache::construct(
+            self.cap(),
+            HashMap::with_capacity_and_hasher(self.cap().get(), self.map.hasher().clone()),
+        );
 
         for (key, value) in self.iter().rev() {
             new_lru.push(key.clone(), value.clone());
