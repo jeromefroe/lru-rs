@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.16.1](https://github.com/jeromefroe/lru-rs/tree/0.16.1) - 2025-09-08
+
+- Fix `Clone` for unbounded cache.
+
 ## [v0.16.0](https://github.com/jeromefroe/lru-rs/tree/0.16.0) - 2025-07-02
 
 - Implement `Clone` for caches with custom hashers.
