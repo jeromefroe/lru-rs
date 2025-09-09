@@ -200,9 +200,14 @@ where
     S: BuildHasher + Clone,
 {
     fn clone(&self) -> Self {
+        let map_cap = if self.is_unbounded() {
+            self.len()
+        } else {
+            self.cap().get()
+        };
         let mut new_lru = LruCache::construct(
             self.cap(),
-            HashMap::with_capacity_and_hasher(self.cap().get(), self.map.hasher().clone()),
+            HashMap::with_capacity_and_hasher(map_cap, self.map.hasher().clone()),
         );
 
         for (key, value) in self.iter().rev() {
@@ -296,6 +301,11 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         }
 
         cache
+    }
+
+    /// Whether this LRU cache is unbounded.
+    fn is_unbounded(&self) -> bool {
+        self.cap() == NonZeroUsize::MAX
     }
 
     /// Puts a key-value pair into cache. If the key already exists in the cache, then it updates
@@ -2800,6 +2810,28 @@ mod tests {
     #[test]
     fn test_clone() {
         let mut cache = LruCache::new(NonZeroUsize::new(3).unwrap());
+        cache.put("a", 1);
+        cache.put("b", 2);
+        cache.put("c", 3);
+
+        let mut cloned = cache.clone();
+
+        assert_eq!(cache.pop_lru(), Some(("a", 1)));
+        assert_eq!(cloned.pop_lru(), Some(("a", 1)));
+
+        assert_eq!(cache.pop_lru(), Some(("b", 2)));
+        assert_eq!(cloned.pop_lru(), Some(("b", 2)));
+
+        assert_eq!(cache.pop_lru(), Some(("c", 3)));
+        assert_eq!(cloned.pop_lru(), Some(("c", 3)));
+
+        assert_eq!(cache.pop_lru(), None);
+        assert_eq!(cloned.pop_lru(), None);
+    }
+
+    #[test]
+    fn test_clone_unbounded() {
+        let mut cache = LruCache::unbounded();
         cache.put("a", 1);
         cache.put("b", 2);
         cache.put("c", 3);
