@@ -20,5 +20,9 @@ nightly = ["hashbrown", "hashbrown/nightly"]
 hashbrown = { version = "0.15.2", optional = true }
 
 [dev-dependencies]
+rand = "0.8.5"
 scoped_threadpool = "0.1.*"
 stats_alloc = "0.1.*"
+
+[[bench]]
+name = "benchmarks"
