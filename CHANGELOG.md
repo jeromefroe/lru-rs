@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.16.4](https://github.com/jeromefroe/lru-rs/tree/0.16.4) - 2026-04-13
+
+- Add `get_or_insert_with_key` and variants.
+
 ## [v0.16.3](https://github.com/jeromefroe/lru-rs/tree/0.16.3) - 2026-01-07
 
 - Fix Stacked Borrows violation in `IterMut`.
