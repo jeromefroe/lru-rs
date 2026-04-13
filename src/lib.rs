@@ -871,7 +871,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         self.get_or_insert_mut_with_key(k, |_| f())
     }
 
-    /// Returns a reference to the value of the key in the cache if it is
+    /// Returns a mutable reference to the value of the key in the cache if it is
     /// present in the cache and moves the key to the head of the LRU list.
     /// If the key does not exist the provided `FnOnce` is used by passing
     /// a reference to the key to populate the list and a mutable reference
@@ -1003,7 +1003,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         self.try_get_or_insert_mut_with_key(k, |_| f())
     }
 
-    /// Returns a reference to the value of the key in the cache if it is
+    /// Returns a mutable reference to the value of the key in the cache if it is
     /// present in the cache and moves the key to the head of the LRU list.
     /// If the key does not exist the provided `FnOnce` is used by passing
     /// a reference to the key to populate the list and a mutable reference
