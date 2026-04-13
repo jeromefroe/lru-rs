@@ -1,6 +1,6 @@
 [package]
 name = "lru"
-version = "0.16.3"
+version = "0.16.4"
 authors = ["Jerome Froelich <jeromefroelic@hotmail.com>"]
 rust-version = "1.70.0"
 categories = ["caching", "no-std"]
