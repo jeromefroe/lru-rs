@@ -2,7 +2,7 @@
 name = "lru"
 version = "0.16.4"
 authors = ["Jerome Froelich <jeromefroelic@hotmail.com>"]
-rust-version = "1.70.0"
+rust-version = "1.85.0"
 categories = ["caching", "no-std"]
 description = "A LRU cache implementation"
 homepage = "https://github.com/jeromefroe/lru-rs"
