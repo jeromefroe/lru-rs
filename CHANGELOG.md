@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.17.0](https://github.com/jeromefroe/lru-rs/tree/0.17.0) - 2026-04-14
+
+- Upgrade `hashbrown` to 0.17.0 and update MSRV to 1.85.0.
+
 ## [v0.16.4](https://github.com/jeromefroe/lru-rs/tree/0.16.4) - 2026-04-13
 
 - Add `get_or_insert_with_key` and variants.
