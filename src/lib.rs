@@ -942,7 +942,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// assert_eq!(Rc::strong_count(&key2), 2); // key2 was only cloned once even though we
     ///                                         // queried it 2 times
     /// ```
-    pub fn get_or_insert_mut_ref<'a, Q, F>(&mut self, k: &'_ Q, f: F) -> &'a mut V
+    pub fn get_or_insert_mut_ref<'a, Q, F>(&'a mut self, k: &'_ Q, f: F) -> &'a mut V
     where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized + alloc::borrow::ToOwned<Owned = K>,
