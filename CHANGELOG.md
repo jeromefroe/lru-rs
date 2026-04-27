@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.18.0](https://github.com/jeromefroe/lru-rs/tree/0.18.0) - 2026-04-27
+
+- Fix unconstrained lifetime in `get_or_insert_mut_ref`.
+
 ## [v0.17.0](https://github.com/jeromefroe/lru-rs/tree/0.17.0) - 2026-04-14
 
 - Upgrade `hashbrown` to 0.17.0 and update MSRV to 1.85.0.
