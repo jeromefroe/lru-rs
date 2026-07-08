@@ -1475,6 +1475,48 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         }
     }
 
+    /// Finds the first entry that matches the provided predicate and promotes it to the
+    /// most recently used position. Returns a reference to the matching entry if one is found.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// use std::num::NonZeroUsize;
+    ///
+    /// let mut cache = LruCache::new(NonZeroUsize::new(3).unwrap());
+    /// cache.put(1, "a");
+    /// cache.put(2, "b");
+    /// cache.put(3, "c");
+    ///
+    /// let found = cache.find_and_promote(|(_, value)| *value == "b");
+    /// assert_eq!(found, Some((&2, &"b")));
+    /// assert_eq!(cache.pop_lru(), Some((1, "a")));
+    /// assert_eq!(cache.pop_lru(), Some((3, "c")));
+    /// assert_eq!(cache.pop_lru(), Some((2, "b")));
+    /// ```
+    pub fn find_and_promote<F>(&mut self, mut predicate: F) -> Option<(&K, &V)>
+    where
+        F: FnMut((&K, &V)) -> bool,
+    {
+        let mut node = unsafe { (*self.head).next };
+
+        while !core::ptr::eq(node, self.tail) {
+            let key = unsafe { &*(*node).key.as_ptr() };
+            let val = unsafe { &*(*node).val.as_ptr() };
+
+            if predicate((key, val)) {
+                self.detach(node);
+                self.attach(node);
+                return Some((key, val));
+            }
+
+            unsafe { node = (*node).next };
+        }
+
+        None
+    }
+
     /// Returns the number of key-value pairs that are currently in the the cache.
     ///
     /// # Example
@@ -2970,6 +3012,36 @@ mod tests {
         }
 
         assert_eq!(DROP_COUNT.load(Ordering::SeqCst), n * n * 2);
+    }
+
+    #[test]
+    fn test_find_and_promote() {
+        let mut cache = LruCache::new(NonZeroUsize::new(3).unwrap());
+        cache.put(1, "a");
+        cache.put(2, "b");
+        cache.put(3, "c");
+
+        let found = cache.find_and_promote(|(_, value)| *value == "b");
+        assert_eq!(found, Some((&2, &"b")));
+        assert_eq!(cache.pop_lru(), Some((1, "a")));
+        assert_eq!(cache.pop_lru(), Some((3, "c")));
+        assert_eq!(cache.pop_lru(), Some((2, "b")));
+        assert_eq!(cache.pop_lru(), None);
+    }
+
+    #[test]
+    fn test_find_and_promote_no_match() {
+        let mut cache = LruCache::new(NonZeroUsize::new(3).unwrap());
+        cache.put(1, "a");
+        cache.put(2, "b");
+        cache.put(3, "c");
+
+        let found = cache.find_and_promote(|(_, value)| *value == "d");
+        assert_eq!(found, None);
+        assert_eq!(cache.pop_lru(), Some((1, "a")));
+        assert_eq!(cache.pop_lru(), Some((2, "b")));
+        assert_eq!(cache.pop_lru(), Some((3, "c")));
+        assert_eq!(cache.pop_lru(), None);
     }
 
     #[test]
