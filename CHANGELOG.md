@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.18.1](https://github.com/jeromefroe/lru-rs/tree/0.18.1) - 2026-07-09
+
+- Add `find_and_promote` method.
+
 ## [v0.18.0](https://github.com/jeromefroe/lru-rs/tree/0.18.0) - 2026-04-27
 
 - Fix unconstrained lifetime in `get_or_insert_mut_ref`.
