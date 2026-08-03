@@ -1283,14 +1283,19 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         match self.map.remove(KeyWrapper::from_ref(k)) {
             None => None,
             Some(old_node) => {
-                let mut old_node = unsafe {
-                    let mut old_node = *Box::from_raw(old_node.as_ptr());
+                let node_ptr: *mut LruEntry<K, V> = old_node.as_ptr();
+
+                // Detach the node from the linked list *before* freeing it and
+                // dropping the key. `ptr::drop_in_place` below runs the key's
+                // `Drop`, which may panic; if it does, unwinding must not leave
+                // dangling `prev`/`next` pointers in the list. Detaching first
+                // keeps the list consistent regardless of whether `Drop` panics.
+                self.detach(node_ptr);
+
+                let mut old_node = unsafe { *Box::from_raw(node_ptr) };
+                unsafe {
                     ptr::drop_in_place(old_node.key.as_mut_ptr());
-
-                    old_node
-                };
-
-                self.detach(&mut old_node);
+                }
 
                 let LruEntry { key: _, val, .. } = old_node;
                 unsafe { Some(val.assume_init()) }
@@ -3175,6 +3180,39 @@ mod tests {
         assert_eq!(cache.get(&1), Some(&20));
         assert_eq!(cache.get(&2), Some(&40));
         assert_eq!(cache.get(&3), Some(&60));
+    }
+
+    #[test]
+    fn test_pop_panicking_key_drop_keeps_list_consistent() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        static ARMED: AtomicBool = AtomicBool::new(false);
+
+        #[derive(PartialEq, Eq, Hash)]
+        struct PanicKey(u32);
+        impl Drop for PanicKey {
+            fn drop(&mut self) {
+                if ARMED.swap(false, Ordering::SeqCst) {
+                    panic!("PanicKey::drop");
+                }
+            }
+        }
+
+        let mut cache = LruCache::new(NonZeroUsize::new(4).unwrap());
+        cache.put(PanicKey(1), "a");
+        cache.put(PanicKey(2), "b");
+        cache.put(PanicKey(3), "c");
+
+        ARMED.store(true, Ordering::SeqCst);
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            cache.pop(&PanicKey(2));
+        }));
+
+        cache.put(PanicKey(4), "d");
+        cache.put(PanicKey(5), "e");
+        let _ = cache.get(&PanicKey(3));
+        for (_k, _v) in cache.iter() {}
     }
 }
 
