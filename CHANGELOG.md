@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.18.2](https://github.com/jeromefroe/lru-rs/tree/0.18.2) - 2026-08-03
+
+- Fix panic-safety unsoundness in `pop` method.
+
 ## [v0.18.1](https://github.com/jeromefroe/lru-rs/tree/0.18.1) - 2026-07-09
 
 - Add `find_and_promote` method.
