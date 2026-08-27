@@ -417,10 +417,10 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             (Some(replaced), old_node)
         } else {
             // if the cache is not full allocate a new LruEntry
-            // Safety: We allocate, turn into raw, and get NonNull all in one step.
-            (None, unsafe {
-                NonNull::new_unchecked(Box::into_raw(Box::new(LruEntry::new(k, v))))
-            })
+            (
+                None,
+                NonNull::new(Box::into_raw(Box::new(LruEntry::new(k, v)))).unwrap(),
+            )
         }
     }
 
