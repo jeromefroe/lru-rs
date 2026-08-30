@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.18.3](https://github.com/jeromefroe/lru-rs/tree/0.18.3) - 2026-08-27
+
+- Add `sparse` constructor.
+
 ## [v0.18.2](https://github.com/jeromefroe/lru-rs/tree/0.18.2) - 2026-08-03
 
 - Fix panic-safety unsoundness in `pop` method.

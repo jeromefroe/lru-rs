@@ -232,6 +232,20 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
         LruCache::construct(cap, HashMap::with_capacity(cap.get()))
     }
 
+    /// Creates a new LRU Cache that holds at most `cap` items without allocating storage space
+    /// for them.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru::LruCache;
+    /// use std::num::NonZeroUsize;
+    /// let mut cache: LruCache<isize, &str> = LruCache::sparse(NonZeroUsize::new(1_000_000).unwrap());
+    /// ```
+    pub fn sparse(cap: NonZeroUsize) -> LruCache<K, V> {
+        LruCache::construct(cap, HashMap::default())
+    }
+
     /// Creates a new LRU Cache that never automatically evicts items.
     ///
     /// # Example
@@ -417,10 +431,10 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             (Some(replaced), old_node)
         } else {
             // if the cache is not full allocate a new LruEntry
-            // Safety: We allocate, turn into raw, and get NonNull all in one step.
-            (None, unsafe {
-                NonNull::new_unchecked(Box::into_raw(Box::new(LruEntry::new(k, v))))
-            })
+            (
+                None,
+                NonNull::new(Box::into_raw(Box::new(LruEntry::new(k, v)))).unwrap(),
+            )
         }
     }
 
