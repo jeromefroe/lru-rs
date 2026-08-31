@@ -1586,20 +1586,23 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
                 };
                 // Free the node the map hands back rather than the traversal pointer,
                 // so we never detach or drop a node the map is still tracking.
-                let removed = self.map.remove(&key_ref);
-                debug_assert!(removed.is_some());
-                if let Some(old_node) = removed {
-                    let node_ptr: *mut LruEntry<K, V> = old_node.as_ptr();
+                let old_node = self
+                    .map
+                    .remove(&key_ref)
+                    .unwrap_or_else(|| {
+                        NonNull::new(node).expect("retain traversal pointer must be non-null")
+                    });
+                debug_assert!(core::ptr::eq(old_node.as_ptr(), node));
+                let node_ptr: *mut LruEntry<K, V> = old_node.as_ptr();
 
-                    // Detach before dropping the key and value so that a panic in either
-                    // `Drop` cannot leave dangling pointers in the list.
-                    self.detach(node_ptr);
+                // Detach before dropping the key and value so that a panic in either
+                // `Drop` cannot leave dangling pointers in the list.
+                self.detach(node_ptr);
 
-                    let mut old_node = unsafe { *Box::from_raw(node_ptr) };
-                    unsafe {
-                        ptr::drop_in_place(old_node.key.as_mut_ptr());
-                        ptr::drop_in_place(old_node.val.as_mut_ptr());
-                    }
+                let mut old_node = unsafe { *Box::from_raw(node_ptr) };
+                unsafe {
+                    ptr::drop_in_place(old_node.key.as_mut_ptr());
+                    ptr::drop_in_place(old_node.val.as_mut_ptr());
                 }
             }
 
