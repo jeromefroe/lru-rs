@@ -1584,22 +1584,13 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
                 let key_ref = KeyRef {
                     k: unsafe { &*(*node).key.as_ptr() },
                 };
-                // Free the node the map hands back rather than the traversal pointer,
-                // so we never detach or drop a node the map is still tracking.
-                let old_node = self
-                    .map
-                    .remove(&key_ref)
-                    .unwrap_or_else(|| {
-                        NonNull::new(node).expect("retain traversal pointer must be non-null")
-                    });
-                debug_assert!(core::ptr::eq(old_node.as_ptr(), node));
-                let node_ptr: *mut LruEntry<K, V> = old_node.as_ptr();
+                self.map.remove(&key_ref);
 
                 // Detach before dropping the key and value so that a panic in either
                 // `Drop` cannot leave dangling pointers in the list.
-                self.detach(node_ptr);
+                self.detach(node);
 
-                let mut old_node = unsafe { *Box::from_raw(node_ptr) };
+                let mut old_node = unsafe { *Box::from_raw(node) };
                 unsafe {
                     ptr::drop_in_place(old_node.key.as_mut_ptr());
                     ptr::drop_in_place(old_node.val.as_mut_ptr());
