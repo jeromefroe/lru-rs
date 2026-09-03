@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.18.4](https://github.com/jeromefroe/lru-rs/tree/0.18.4) - 2026-09-02
+
+- Add `retain` method.
+
 ## [v0.18.3](https://github.com/jeromefroe/lru-rs/tree/0.18.3) - 2026-08-27
 
 - Add `sparse` constructor.
