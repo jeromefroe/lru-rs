@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.18.5](https://github.com/jeromefroe/lru-rs/tree/0.18.5) - 2026-09-22
+
+- Specify desired hashbrown features to reduce dependencies.
+
 ## [v0.18.4](https://github.com/jeromefroe/lru-rs/tree/0.18.4) - 2026-09-02
 
 - Add `retain` method.
