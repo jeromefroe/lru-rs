@@ -67,6 +67,7 @@ extern crate scoped_threadpool;
 
 use alloc::borrow::Borrow;
 use alloc::boxed::Box;
+use alloc::vec::Vec;
 use core::fmt;
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::iter::FusedIterator;
@@ -1568,6 +1569,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     where
         F: FnMut(&K, &mut V) -> bool,
     {
+        let mut removed = Vec::new();
         let mut node = unsafe { (*self.head).next };
 
         while !core::ptr::eq(node, self.tail) {
@@ -1581,23 +1583,37 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             };
 
             if !keep {
-                let key_ref = KeyRef {
-                    k: unsafe { &*(*node).key.as_ptr() },
-                };
-                self.map.remove(&key_ref);
-
-                // Detach before dropping the key and value so that a panic in either
-                // `Drop` cannot leave dangling pointers in the list.
-                self.detach(node);
-
-                let mut old_node = unsafe { *Box::from_raw(node) };
-                unsafe {
-                    ptr::drop_in_place(old_node.key.as_mut_ptr());
-                    ptr::drop_in_place(old_node.val.as_mut_ptr());
-                }
+                removed.push(node);
             }
 
             node = next;
+        }
+
+        // Rebuild the map from the live list before freeing removed nodes. The predicate only
+        // receives a shared key reference, but interior mutability can still change its hash or
+        // equality. Removing by the current key could then miss this node (or match another one)
+        // and leave the map holding a pointer to freed memory.
+        for &node in &removed {
+            self.detach(node);
+        }
+        self.map.clear();
+
+        let mut node = unsafe { (*self.head).next };
+        while !core::ptr::eq(node, self.tail) {
+            let key_ref = unsafe { (*node).key.as_ptr() };
+            self.map.insert(
+                KeyRef { k: key_ref },
+                NonNull::new(node).expect("linked cache node cannot be null"),
+            );
+            node = unsafe { (*node).next };
+        }
+
+        for node in removed {
+            let mut old_node = unsafe { *Box::from_raw(node) };
+            unsafe {
+                ptr::drop_in_place(old_node.key.as_mut_ptr());
+                ptr::drop_in_place(old_node.val.as_mut_ptr());
+            }
         }
     }
 
@@ -2077,10 +2093,28 @@ impl<K: Hash + Eq, V> IntoIterator for LruCache<K, V> {
 #[cfg(test)]
 mod tests {
     use super::LruCache;
+    use core::cell::Cell;
+    use core::hash::{Hash, Hasher};
     use core::{fmt::Debug, num::NonZeroUsize};
     use scoped_threadpool::Pool;
     use std::rc::Rc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct MutableKey(Cell<u8>);
+
+    impl PartialEq for MutableKey {
+        fn eq(&self, other: &Self) -> bool {
+            self.0.get() == other.0.get()
+        }
+    }
+
+    impl Eq for MutableKey {}
+
+    impl Hash for MutableKey {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.0.get().hash(state);
+        }
+    }
 
     fn assert_opt_eq<V: PartialEq + Debug>(opt: Option<&V>, v: V) {
         assert!(opt.is_some());
@@ -3014,6 +3048,34 @@ mod tests {
         assert_opt_eq_tuple(iter.next(), (4, 80));
         assert_opt_eq_tuple(iter.next(), (2, 40));
         assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn test_retain_removes_key_with_interior_mutated_hash() {
+        let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+        cache.put(MutableKey(Cell::new(1)), 10);
+
+        cache.retain(|key, _| {
+            key.0.set(2);
+            false
+        });
+
+        assert_eq!(cache.len(), 0);
+        assert_eq!(cache.get(&MutableKey(Cell::new(1))), None);
+    }
+
+    #[test]
+    fn test_retain_rehashes_kept_key_with_interior_mutability() {
+        let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+        cache.put(MutableKey(Cell::new(1)), 10);
+
+        cache.retain(|key, _| {
+            key.0.set(2);
+            true
+        });
+
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.get(&MutableKey(Cell::new(2))), Some(&10));
     }
 
     #[test]
