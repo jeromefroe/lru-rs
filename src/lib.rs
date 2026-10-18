@@ -1890,6 +1890,23 @@ impl<K: Hash + Eq, V, S: BuildHasher> fmt::Debug for LruCache<K, V, S> {
 /// This `struct` is created by the [`iter`] method on [`LruCache`][`LruCache`]. See its
 /// documentation for more.
 ///
+/// An iterator can be sent to another thread only if its keys and values are
+/// `Sync`, since it yields shared references to them.
+///
+/// ```compile_fail
+/// use std::cell::Cell;
+///
+/// fn assert_send<T: Send>() {}
+/// assert_send::<lru::Iter<'_, Cell<u8>, u8>>();
+/// ```
+///
+/// ```compile_fail
+/// use std::cell::Cell;
+///
+/// fn assert_send<T: Send>() {}
+/// assert_send::<lru::Iter<'_, u8, Cell<u8>>>();
+/// ```
+///
 /// [`iter`]: struct.LruCache.html#method.iter
 /// [`LruCache`]: struct.LruCache.html
 pub struct Iter<'a, K: 'a, V: 'a> {
@@ -1959,7 +1976,7 @@ impl<'a, K, V> Clone for Iter<'a, K, V> {
 
 // The compiler does not automatically derive Send and Sync for Iter because it contains
 // raw pointers.
-unsafe impl<'a, K: Send, V: Send> Send for Iter<'a, K, V> {}
+unsafe impl<'a, K: Sync, V: Sync> Send for Iter<'a, K, V> {}
 unsafe impl<'a, K: Sync, V: Sync> Sync for Iter<'a, K, V> {}
 
 /// An iterator over mutables entries of a `LruCache`.
@@ -2903,6 +2920,26 @@ mod tests {
 
         assert_eq!(iter.len(), 0);
         assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn test_iter_send_sync_not_send() {
+        use std::sync::{Mutex, MutexGuard};
+        use std::thread;
+
+        fn assert_send<T: Send>() {}
+        assert_send::<super::Iter<'_, MutexGuard<'_, ()>, MutexGuard<'_, ()>>>();
+
+        let lock = Mutex::new(42);
+        let mut cache = LruCache::new(NonZeroUsize::new(1).unwrap());
+        cache.put(1, lock.lock().unwrap());
+        let mut iter = cache.iter();
+        thread::scope(|scope| {
+            scope
+                .spawn(move || assert_eq!(**iter.next().unwrap().1, 42))
+                .join()
+                .unwrap();
+        });
     }
 
     #[test]
