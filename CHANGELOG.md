@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.19.0](https://github.com/jeromefroe/lru-rs/tree/0.19.0) - 2026-10-18
+
+- Require `Sync` for sendable shared iterators.
+
 ## [v0.18.5](https://github.com/jeromefroe/lru-rs/tree/0.18.5) - 2026-09-22
 
 - Specify desired hashbrown features to reduce dependencies.
