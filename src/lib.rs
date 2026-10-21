@@ -67,6 +67,7 @@ extern crate scoped_threadpool;
 
 use alloc::borrow::Borrow;
 use alloc::boxed::Box;
+use alloc::vec::Vec;
 use core::fmt;
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::iter::FusedIterator;
@@ -1568,36 +1569,92 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     where
         F: FnMut(&K, &mut V) -> bool,
     {
+        let mut removed = Vec::new();
+        let mut hash_mutated = false;
         let mut node = unsafe { (*self.head).next };
 
         while !core::ptr::eq(node, self.tail) {
             // Grab the next node before we potentially free the current one.
             let next = unsafe { (*node).next };
 
-            let keep = {
+            let (keep, hash_changed) = {
                 let key = unsafe { &*(*node).key.as_ptr() };
                 let val = unsafe { &mut *(*node).val.as_mut_ptr() };
-                f(key, val)
+
+                let mut hasher_before = self.map.hasher().build_hasher();
+                key.hash(&mut hasher_before);
+                let hash_before = hasher_before.finish();
+
+                let keep = f(key, val);
+
+                let mut hasher_after = self.map.hasher().build_hasher();
+                key.hash(&mut hasher_after);
+                let hash_after = hasher_after.finish();
+
+                (keep, hash_before != hash_after)
             };
 
+            if hash_changed {
+                hash_mutated = true;
+            }
+
             if !keep {
+                removed.push(node);
+            }
+
+            node = next;
+        }
+
+        if !hash_mutated {
+            // Fast path: none of the key hashes mutated, so use the lightweight in-place
+            // removal without clearing or rebuilding the map.
+            for node in removed {
                 let key_ref = KeyRef {
                     k: unsafe { &*(*node).key.as_ptr() },
                 };
                 self.map.remove(&key_ref);
-
-                // Detach before dropping the key and value so that a panic in either
-                // `Drop` cannot leave dangling pointers in the list.
                 self.detach(node);
-
                 let mut old_node = unsafe { *Box::from_raw(node) };
                 unsafe {
                     ptr::drop_in_place(old_node.key.as_mut_ptr());
                     ptr::drop_in_place(old_node.val.as_mut_ptr());
                 }
             }
+            return;
+        }
 
+        // Slow path: at least one key mutated its hash via interior mutability.
+        // Rebuild the map from surviving nodes while safely handling key collisions.
+        for &node in &removed {
+            self.detach(node);
+        }
+        self.map.clear();
+
+        let mut duplicates = Vec::new();
+        let mut node = unsafe { (*self.head).next };
+        while !core::ptr::eq(node, self.tail) {
+            let next = unsafe { (*node).next };
+            let key_ref = unsafe { (*node).key.as_ptr() };
+            if let Some(displaced) = self.map.insert(
+                KeyRef { k: key_ref },
+                NonNull::new(node).expect("linked cache node cannot be null"),
+            ) {
+                // If two retained keys mutated to become equal, the displaced
+                // node is detached and freed to maintain consistent cache length
+                // and avoid orphaned list nodes.
+                let displaced_node = displaced.as_ptr();
+                self.detach(displaced_node);
+                duplicates.push(displaced_node);
+            }
             node = next;
+        }
+
+        for node in removed.into_iter().chain(duplicates) {
+            let mut old_node = unsafe { *Box::from_raw(node) };
+            unsafe {
+                ptr::drop_in_place(old_node.key.as_mut_ptr());
+                ptr::drop_in_place(old_node.val.as_mut_ptr());
+            }
         }
     }
 
@@ -2094,10 +2151,29 @@ impl<K: Hash + Eq, V> IntoIterator for LruCache<K, V> {
 #[cfg(test)]
 mod tests {
     use super::LruCache;
+    use alloc::vec::Vec;
+    use core::cell::Cell;
+    use core::hash::{Hash, Hasher};
     use core::{fmt::Debug, num::NonZeroUsize};
     use scoped_threadpool::Pool;
     use std::rc::Rc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct MutableKey(Cell<u8>);
+
+    impl PartialEq for MutableKey {
+        fn eq(&self, other: &Self) -> bool {
+            self.0.get() == other.0.get()
+        }
+    }
+
+    impl Eq for MutableKey {}
+
+    impl Hash for MutableKey {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.0.get().hash(state);
+        }
+    }
 
     fn assert_opt_eq<V: PartialEq + Debug>(opt: Option<&V>, v: V) {
         assert!(opt.is_some());
@@ -3051,6 +3127,57 @@ mod tests {
         assert_opt_eq_tuple(iter.next(), (4, 80));
         assert_opt_eq_tuple(iter.next(), (2, 40));
         assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn test_retain_removes_key_with_interior_mutated_hash() {
+        let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+        cache.put(MutableKey(Cell::new(1)), 10);
+
+        cache.retain(|key, _| {
+            key.0.set(2);
+            false
+        });
+
+        assert_eq!(cache.len(), 0);
+        assert_eq!(cache.get(&MutableKey(Cell::new(1))), None);
+    }
+
+    #[test]
+    fn test_retain_rehashes_kept_key_with_interior_mutability() {
+        let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+        cache.put(MutableKey(Cell::new(1)), 10);
+
+        cache.retain(|key, _| {
+            key.0.set(2);
+            true
+        });
+
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.get(&MutableKey(Cell::new(2))), Some(&10));
+    }
+
+    #[test]
+    fn test_retain_with_mutated_key_collision_removes_displaced_node() {
+        let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+        cache.put(MutableKey(Cell::new(1)), 10);
+        cache.put(MutableKey(Cell::new(2)), 20);
+
+        // Mutate both retained keys to become equal.
+        cache.retain(|key, _| {
+            key.0.set(42);
+            true
+        });
+
+        // Exactly one surviving entry remains in the cache.
+        assert_eq!(cache.len(), 1);
+        let items: Vec<_> = cache.iter().map(|(k, v)| (k.0.get(), *v)).collect();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].0, 42);
+
+        // Newly inserted entries can still be placed normally.
+        cache.put(MutableKey(Cell::new(99)), 990);
+        assert_eq!(cache.len(), 2);
     }
 
     #[test]
