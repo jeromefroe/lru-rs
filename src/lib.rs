@@ -1570,33 +1570,28 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         F: FnMut(&K, &mut V) -> bool,
     {
         let mut removed = Vec::new();
-        let mut hash_mutated = false;
+        let mut original_hashes = Vec::with_capacity(self.map.len());
         let mut node = unsafe { (*self.head).next };
 
+        // Snapshot every key before calling the predicate. The predicate can mutate
+        // another key through interior mutability, so comparing only the key passed
+        // to each invocation would miss changes made by an earlier invocation.
+        while !core::ptr::eq(node, self.tail) {
+            let key = unsafe { &*(*node).key.as_ptr() };
+            original_hashes.push((node, self.map.hasher().hash_one(key)));
+            node = unsafe { (*node).next };
+        }
+
+        node = unsafe { (*self.head).next };
         while !core::ptr::eq(node, self.tail) {
             // Grab the next node before we potentially free the current one.
             let next = unsafe { (*node).next };
 
-            let (keep, hash_changed) = {
+            let keep = {
                 let key = unsafe { &*(*node).key.as_ptr() };
                 let val = unsafe { &mut *(*node).val.as_mut_ptr() };
-
-                let mut hasher_before = self.map.hasher().build_hasher();
-                key.hash(&mut hasher_before);
-                let hash_before = hasher_before.finish();
-
-                let keep = f(key, val);
-
-                let mut hasher_after = self.map.hasher().build_hasher();
-                key.hash(&mut hasher_after);
-                let hash_after = hasher_after.finish();
-
-                (keep, hash_before != hash_after)
+                f(key, val)
             };
-
-            if hash_changed {
-                hash_mutated = true;
-            }
 
             if !keep {
                 removed.push(node);
@@ -1605,14 +1600,25 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             node = next;
         }
 
+        let hash_mutated = original_hashes.iter().any(|(node, original_hash)| {
+            let key = unsafe { &*(*(*node)).key.as_ptr() };
+            self.map.hasher().hash_one(key) != *original_hash
+        });
+
         if !hash_mutated {
-            // Fast path: none of the key hashes mutated, so use the lightweight in-place
-            // removal without clearing or rebuilding the map.
+            // Remove map entries by node identity. Looking them up by key is unsafe
+            // here: a predicate may have changed equality while leaving the hash
+            // unchanged, causing remove() to select a different equal key.
+            let mut removed_addresses: Vec<usize> =
+                removed.iter().map(|node| *node as usize).collect();
+            removed_addresses.sort_unstable();
+            self.map.retain(|_, node| {
+                removed_addresses
+                    .binary_search(&(node.as_ptr() as usize))
+                    .is_err()
+            });
+
             for node in removed {
-                let key_ref = KeyRef {
-                    k: unsafe { &*(*node).key.as_ptr() },
-                };
-                self.map.remove(&key_ref);
                 self.detach(node);
                 let mut old_node = unsafe { *Box::from_raw(node) };
                 unsafe {
@@ -1649,7 +1655,32 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             node = next;
         }
 
-        for node in removed.into_iter().chain(duplicates) {
+        if !duplicates.is_empty() {
+            // `HashMap::insert` keeps the existing key when two mutated keys become
+            // equal, even though it replaces the value. Clear those borrowed key
+            // references before freeing any displaced nodes, then rebuild from the
+            // surviving list after removing duplicates.
+            self.map.clear();
+            for node in duplicates {
+                let mut old_node = unsafe { *Box::from_raw(node) };
+                unsafe {
+                    ptr::drop_in_place(old_node.key.as_mut_ptr());
+                    ptr::drop_in_place(old_node.val.as_mut_ptr());
+                }
+            }
+
+            let mut node = unsafe { (*self.head).next };
+            while !core::ptr::eq(node, self.tail) {
+                let key_ref = unsafe { (*node).key.as_ptr() };
+                self.map.insert(
+                    KeyRef { k: key_ref },
+                    NonNull::new(node).expect("linked cache node cannot be null"),
+                );
+                node = unsafe { (*node).next };
+            }
+        }
+
+        for node in removed {
             let mut old_node = unsafe { *Box::from_raw(node) };
             unsafe {
                 ptr::drop_in_place(old_node.key.as_mut_ptr());
@@ -2172,6 +2203,39 @@ mod tests {
     impl Hash for MutableKey {
         fn hash<H: Hasher>(&self, state: &mut H) {
             self.0.get().hash(state);
+        }
+    }
+
+    #[derive(Clone)]
+    struct SharedMutableKey(Rc<Cell<u8>>);
+
+    impl PartialEq for SharedMutableKey {
+        fn eq(&self, other: &Self) -> bool {
+            self.0.get() == other.0.get()
+        }
+    }
+
+    impl Eq for SharedMutableKey {}
+
+    impl Hash for SharedMutableKey {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.0.get().hash(state);
+        }
+    }
+
+    struct HashStableKey(Rc<Cell<u8>>);
+
+    impl PartialEq for HashStableKey {
+        fn eq(&self, other: &Self) -> bool {
+            self.0.get() == other.0.get()
+        }
+    }
+
+    impl Eq for HashStableKey {}
+
+    impl Hash for HashStableKey {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            0_u8.hash(state);
         }
     }
 
@@ -3155,6 +3219,53 @@ mod tests {
 
         assert_eq!(cache.len(), 1);
         assert_eq!(cache.get(&MutableKey(Cell::new(2))), Some(&10));
+    }
+
+    #[test]
+    fn test_retain_rehashes_key_mutated_by_another_predicate() {
+        let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+        let older = Rc::new(Cell::new(1));
+        let newer = Rc::new(Cell::new(2));
+        cache.put(SharedMutableKey(older.clone()), 10);
+        cache.put(SharedMutableKey(newer.clone()), 20);
+
+        cache.retain(|key, _| {
+            if key.0.get() == 2 {
+                older.set(3);
+            }
+            true
+        });
+
+        assert_eq!(
+            cache.get(&SharedMutableKey(Rc::new(Cell::new(3)))),
+            Some(&10)
+        );
+        assert_eq!(
+            cache.get(&SharedMutableKey(Rc::new(Cell::new(2)))),
+            Some(&20)
+        );
+    }
+
+    #[test]
+    fn test_retain_removes_mutated_equal_key_by_node_identity() {
+        let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+        let older = Rc::new(Cell::new(1));
+        cache.put(HashStableKey(older.clone()), 10);
+        cache.put(HashStableKey(Rc::new(Cell::new(2))), 20);
+
+        let mut first = true;
+        cache.retain(|_, _| {
+            if first {
+                first = false;
+                older.set(2);
+                false
+            } else {
+                true
+            }
+        });
+
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.get(&HashStableKey(Rc::new(Cell::new(2)))), Some(&10));
     }
 
     #[test]
