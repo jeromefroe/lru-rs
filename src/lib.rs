@@ -1637,8 +1637,8 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             for &node in &removed {
                 self.detach(node);
             }
-            rebuild_guard.armed = false;
             if removed.is_empty() {
+                rebuild_guard.armed = false;
                 return;
             }
             for node in removed.drain(..) {
@@ -3472,10 +3472,89 @@ mod tests {
         }));
 
         assert!(result.is_err());
-        assert_eq!(cache.len(), 1);
-        assert_eq!(cache.peek(&PanicDropKey(2)), Some(&20));
-        assert_eq!(cache.pop_lru().map(|(_, value)| value), Some(20));
+        // User destructors may mutate retained keys before a later destructor
+        // panics, so the unwind guard leaves a valid empty cache.
         assert!(cache.is_empty());
+        cache.put(PanicDropKey(4), 40);
+        assert_eq!(cache.pop_lru().map(|(_, value)| value), Some(40));
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn test_retain_drop_panic_after_mutating_survivor_leaves_cache_valid() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+
+        static PANIC_ON_DROP: AtomicBool = AtomicBool::new(false);
+        struct MutateThenPanicKey {
+            value: Rc<Cell<u8>>,
+            mutate_on_drop: Option<Rc<Cell<u8>>>,
+            panic_on_drop: bool,
+        }
+        impl PartialEq for MutateThenPanicKey {
+            fn eq(&self, other: &Self) -> bool {
+                self.value.get() == other.value.get()
+            }
+        }
+        impl Eq for MutateThenPanicKey {}
+        impl Hash for MutateThenPanicKey {
+            fn hash<H: Hasher>(&self, state: &mut H) {
+                self.value.get().hash(state);
+            }
+        }
+        impl Drop for MutateThenPanicKey {
+            fn drop(&mut self) {
+                if let Some(target) = self.mutate_on_drop.take() {
+                    target.set(7);
+                }
+                if self.panic_on_drop && PANIC_ON_DROP.swap(false, Ordering::SeqCst) {
+                    panic!("key destructor panic after mutating survivor");
+                }
+            }
+        }
+
+        let mut cache = LruCache::new(NonZeroUsize::new(3).unwrap());
+        let survivor = Rc::new(Cell::new(3));
+        cache.put(
+            MutateThenPanicKey {
+                value: survivor.clone(),
+                mutate_on_drop: None,
+                panic_on_drop: false,
+            },
+            30,
+        );
+        cache.put(
+            MutateThenPanicKey {
+                value: Rc::new(Cell::new(2)),
+                mutate_on_drop: None,
+                panic_on_drop: true,
+            },
+            20,
+        );
+        cache.put(
+            MutateThenPanicKey {
+                value: Rc::new(Cell::new(1)),
+                mutate_on_drop: Some(survivor),
+                panic_on_drop: false,
+            },
+            10,
+        );
+
+        PANIC_ON_DROP.store(true, Ordering::SeqCst);
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            cache.retain(|key, _| key.value.get() == 3);
+        }));
+
+        assert!(result.is_err());
+        assert!(cache.is_empty());
+        cache.put(
+            MutateThenPanicKey {
+                value: Rc::new(Cell::new(9)),
+                mutate_on_drop: None,
+                panic_on_drop: false,
+            },
+            90,
+        );
+        assert_eq!(cache.len(), 1);
     }
 
     #[test]
