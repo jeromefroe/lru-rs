@@ -194,6 +194,34 @@ pub struct LruCache<K, V, S = DefaultHasher> {
     tail: *mut LruEntry<K, V>,
 }
 
+struct RetainRebuildGuard<K: Hash + Eq, V, S: BuildHasher> {
+    cache: *mut LruCache<K, V, S>,
+    armed: bool,
+}
+
+impl<K: Hash + Eq, V, S: BuildHasher> Drop for RetainRebuildGuard<K, V, S> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+
+        // Hash, equality, or a value destructor may panic during rebuilding. There
+        // is no safe way to reindex during unwinding, so leave a valid empty cache
+        // and leak its nodes rather than keep dangling map/list references.
+        unsafe {
+            let cache = &mut *self.cache;
+            cache.map.clear();
+            let mut node = (*cache.head).next;
+            while !core::ptr::eq(node, cache.tail) {
+                let next = (*node).next;
+                cache.detach(node);
+                let _ = Box::into_raw(Box::from_raw(node));
+                node = next;
+            }
+        }
+    }
+}
+
 impl<K, V, S> Clone for LruCache<K, V, S>
 where
     K: Hash + PartialEq + Eq + Clone,
@@ -1582,6 +1610,11 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             node = unsafe { (*node).next };
         }
 
+        let mut rebuild_guard = RetainRebuildGuard {
+            cache: self,
+            armed: true,
+        };
+
         node = unsafe { (*self.head).next };
         while !core::ptr::eq(node, self.tail) {
             // Grab the next node before we potentially free the current one.
@@ -1609,17 +1642,18 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             // Remove map entries by node identity. Looking them up by key is unsafe
             // here: a predicate may have changed equality while leaving the hash
             // unchanged, causing remove() to select a different equal key.
-            let mut removed_addresses: Vec<usize> =
-                removed.iter().map(|node| *node as usize).collect();
-            removed_addresses.sort_unstable();
+            removed.sort_unstable_by_key(|node| *node as usize);
             self.map.retain(|_, node| {
-                removed_addresses
-                    .binary_search(&(node.as_ptr() as usize))
+                removed
+                    .binary_search_by_key(&(node.as_ptr() as usize), |removed| *removed as usize)
                     .is_err()
             });
 
-            for node in removed {
+            for &node in &removed {
                 self.detach(node);
+            }
+            rebuild_guard.armed = false;
+            for node in removed {
                 let mut old_node = unsafe { *Box::from_raw(node) };
                 unsafe {
                     ptr::drop_in_place(old_node.key.as_mut_ptr());
@@ -1630,63 +1664,38 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         }
 
         // Slow path: at least one key mutated its hash via interior mutability.
-        // Rebuild the map from surviving nodes while safely handling key collisions.
+        // The guard keeps the cache valid if user Hash/Eq or Drop implementations panic.
         for &node in &removed {
             self.detach(node);
         }
         self.map.clear();
 
-        let mut duplicates = Vec::new();
-        let mut node = unsafe { (*self.head).next };
-        while !core::ptr::eq(node, self.tail) {
-            let next = unsafe { (*node).next };
-            let key_ref = unsafe { (*node).key.as_ptr() };
-            if let Some(displaced) = self.map.insert(
-                KeyRef { k: key_ref },
-                NonNull::new(node).expect("linked cache node cannot be null"),
-            ) {
-                // If two retained keys mutated to become equal, the displaced
-                // node is detached and freed to maintain consistent cache length
-                // and avoid orphaned list nodes.
-                let displaced_node = displaced.as_ptr();
-                self.detach(displaced_node);
-                duplicates.push(displaced_node);
-            }
-            node = next;
-        }
-
-        if !duplicates.is_empty() {
-            // `HashMap::insert` keeps the existing key when two mutated keys become
-            // equal, even though it replaces the value. Clear those borrowed key
-            // references before freeing any displaced nodes, then rebuild from the
-            // surviving list after removing duplicates.
+        let mut pending = self.rebuild_map_from_list();
+        pending.extend(removed);
+        loop {
+            // Remove borrowed pointers to pending nodes, then rebuild from the
+            // survivors before their destructors run. Destructors can mutate
+            // surviving keys, so another pass follows each drop batch.
             self.map.clear();
-            for node in duplicates {
+            let duplicates = self.rebuild_map_from_list();
+            for node in pending {
                 let mut old_node = unsafe { *Box::from_raw(node) };
                 unsafe {
                     ptr::drop_in_place(old_node.key.as_mut_ptr());
                     ptr::drop_in_place(old_node.val.as_mut_ptr());
                 }
             }
-
-            let mut node = unsafe { (*self.head).next };
-            while !core::ptr::eq(node, self.tail) {
-                let key_ref = unsafe { (*node).key.as_ptr() };
-                self.map.insert(
-                    KeyRef { k: key_ref },
-                    NonNull::new(node).expect("linked cache node cannot be null"),
-                );
-                node = unsafe { (*node).next };
+            pending = duplicates;
+            if pending.is_empty() {
+                self.map.clear();
+                pending = self.rebuild_map_from_list();
+                if pending.is_empty() {
+                    break;
+                }
             }
         }
 
-        for node in removed {
-            let mut old_node = unsafe { *Box::from_raw(node) };
-            unsafe {
-                ptr::drop_in_place(old_node.key.as_mut_ptr());
-                ptr::drop_in_place(old_node.val.as_mut_ptr());
-            }
-        }
+        rebuild_guard.armed = false;
     }
 
     /// Returns the number of key-value pairs that are currently in the the cache.
@@ -1902,6 +1911,25 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             (*(*node).prev).next = (*node).next;
             (*(*node).next).prev = (*node).prev;
         }
+    }
+
+    fn rebuild_map_from_list(&mut self) -> Vec<*mut LruEntry<K, V>> {
+        let mut duplicates = Vec::new();
+        let mut node = unsafe { (*self.head).next };
+        while !core::ptr::eq(node, self.tail) {
+            let next = unsafe { (*node).next };
+            let key_ref = unsafe { (*node).key.as_ptr() };
+            if let Some(displaced) = self.map.insert(
+                KeyRef { k: key_ref },
+                NonNull::new(node).expect("linked cache node cannot be null"),
+            ) {
+                let displaced_node = displaced.as_ptr();
+                self.detach(displaced_node);
+                duplicates.push(displaced_node);
+            }
+            node = next;
+        }
+        duplicates
     }
 
     // Attaches `node` after the sigil `self.head` node.
@@ -2188,7 +2216,7 @@ mod tests {
     use core::{fmt::Debug, num::NonZeroUsize};
     use scoped_threadpool::Pool;
     use std::rc::Rc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     struct MutableKey(Cell<u8>);
 
@@ -2236,6 +2264,53 @@ mod tests {
     impl Hash for HashStableKey {
         fn hash<H: Hasher>(&self, state: &mut H) {
             0_u8.hash(state);
+        }
+    }
+
+    struct PanicHashKey {
+        value: Rc<Cell<u8>>,
+        panic_hash: Rc<Cell<bool>>,
+    }
+
+    impl PartialEq for PanicHashKey {
+        fn eq(&self, other: &Self) -> bool {
+            self.value.get() == other.value.get()
+        }
+    }
+
+    impl Eq for PanicHashKey {}
+
+    impl Hash for PanicHashKey {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            assert!(!self.panic_hash.get(), "hash panic");
+            self.value.get().hash(state);
+        }
+    }
+
+    struct DropMutatingKey {
+        value: Rc<Cell<u8>>,
+        mutate_on_drop: Option<Rc<Cell<u8>>>,
+    }
+
+    impl PartialEq for DropMutatingKey {
+        fn eq(&self, other: &Self) -> bool {
+            self.value.get() == other.value.get()
+        }
+    }
+
+    impl Eq for DropMutatingKey {}
+
+    impl Hash for DropMutatingKey {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.value.get().hash(state);
+        }
+    }
+
+    impl Drop for DropMutatingKey {
+        fn drop(&mut self) {
+            if let Some(target) = self.mutate_on_drop.take() {
+                target.set(1);
+            }
         }
     }
 
@@ -3289,6 +3364,112 @@ mod tests {
         // Newly inserted entries can still be placed normally.
         cache.put(MutableKey(Cell::new(99)), 990);
         assert_eq!(cache.len(), 2);
+    }
+
+    #[test]
+    fn test_retain_rebuild_panic_leaves_cache_valid() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+
+        let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+        let panic_hash = Rc::new(Cell::new(false));
+        cache.put(
+            PanicHashKey {
+                value: Rc::new(Cell::new(1)),
+                panic_hash: panic_hash.clone(),
+            },
+            10,
+        );
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            cache.retain(|_, _| {
+                panic_hash.set(true);
+                true
+            });
+        }));
+
+        assert!(result.is_err());
+        assert!(cache.is_empty());
+        cache.put(
+            PanicHashKey {
+                value: Rc::new(Cell::new(2)),
+                panic_hash: Rc::new(Cell::new(false)),
+            },
+            20,
+        );
+        assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
+    fn test_retain_rebuilds_after_removed_key_destructor_mutates_survivor() {
+        let mut cache = LruCache::new(NonZeroUsize::new(3).unwrap());
+        let survivor = Rc::new(Cell::new(2));
+        cache.put(
+            DropMutatingKey {
+                value: Rc::new(Cell::new(1)),
+                mutate_on_drop: None,
+            },
+            10,
+        );
+        cache.put(
+            DropMutatingKey {
+                value: survivor.clone(),
+                mutate_on_drop: None,
+            },
+            20,
+        );
+        cache.put(
+            DropMutatingKey {
+                value: Rc::new(Cell::new(3)),
+                mutate_on_drop: Some(survivor.clone()),
+            },
+            30,
+        );
+
+        cache.retain(|key, _| {
+            if key.value.get() == 2 {
+                key.value.set(4);
+            }
+            key.value.get() != 3
+        });
+
+        assert_eq!(cache.len(), 1);
+        let remaining = cache
+            .peek(&DropMutatingKey {
+                value: Rc::new(Cell::new(1)),
+                mutate_on_drop: None,
+            })
+            .copied();
+        assert!(matches!(remaining, Some(10 | 20)));
+    }
+
+    #[test]
+    fn test_retain_detaches_all_rejected_nodes_before_drop() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+
+        static PANIC_ON_DROP: AtomicBool = AtomicBool::new(false);
+        #[derive(PartialEq, Eq, Hash)]
+        struct PanicDropKey(u8);
+        impl Drop for PanicDropKey {
+            fn drop(&mut self) {
+                if PANIC_ON_DROP.swap(false, Ordering::SeqCst) {
+                    panic!("key destructor panic");
+                }
+            }
+        }
+
+        let mut cache = LruCache::new(NonZeroUsize::new(3).unwrap());
+        cache.put(PanicDropKey(1), 10);
+        cache.put(PanicDropKey(2), 20);
+        cache.put(PanicDropKey(3), 30);
+
+        PANIC_ON_DROP.store(true, Ordering::SeqCst);
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            cache.retain(|key, _| key.0 == 2);
+        }));
+
+        assert!(result.is_err());
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.peek(&PanicDropKey(2)), Some(&20));
     }
 
     #[test]
