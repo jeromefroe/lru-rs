@@ -3470,6 +3470,8 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(cache.len(), 1);
         assert_eq!(cache.peek(&PanicDropKey(2)), Some(&20));
+        assert_eq!(cache.pop_lru().map(|(_, value)| value), Some(20));
+        assert!(cache.is_empty());
     }
 
     #[test]
