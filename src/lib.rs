@@ -1598,24 +1598,13 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
         F: FnMut(&K, &mut V) -> bool,
     {
         let mut removed = Vec::new();
-        let mut original_hashes = Vec::with_capacity(self.map.len());
         let mut node = unsafe { (*self.head).next };
-
-        // Snapshot every key before calling the predicate. The predicate can mutate
-        // another key through interior mutability, so comparing only the key passed
-        // to each invocation would miss changes made by an earlier invocation.
-        while !core::ptr::eq(node, self.tail) {
-            let key = unsafe { &*(*node).key.as_ptr() };
-            original_hashes.push((node, self.map.hasher().hash_one(key)));
-            node = unsafe { (*node).next };
-        }
 
         let mut rebuild_guard = RetainRebuildGuard {
             cache: self,
             armed: true,
         };
 
-        node = unsafe { (*self.head).next };
         while !core::ptr::eq(node, self.tail) {
             // Grab the next node before we potentially free the current one.
             let next = unsafe { (*node).next };
@@ -1633,38 +1622,44 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             node = next;
         }
 
-        let hash_mutated = original_hashes.iter().any(|(node, original_hash)| {
-            let key = unsafe { &*(*(*node)).key.as_ptr() };
-            self.map.hasher().hash_one(key) != *original_hash
-        });
-
-        if !hash_mutated {
-            // Remove map entries by node identity. Looking them up by key is unsafe
-            // here: a predicate may have changed equality while leaving the hash
-            // unchanged, causing remove() to select a different equal key.
+        // Check that the current key for each node still resolves to that same
+        // node. This detects hash or equality changes without storing a second
+        // full-cache snapshot. The guard handles Hash/Eq panics during the check.
+        if self.map_matches_list() {
+            // Remove entries by node identity. Looking them up for removal by key
+            // could select a different equal entry if a predicate mutated Eq.
             removed.sort_unstable_by_key(|node| *node as usize);
             self.map.retain(|_, node| {
                 removed
                     .binary_search_by_key(&(node.as_ptr() as usize), |removed| *removed as usize)
                     .is_err()
             });
-
             for &node in &removed {
                 self.detach(node);
             }
             rebuild_guard.armed = false;
-            for node in removed {
+            if removed.is_empty() {
+                return;
+            }
+            for node in removed.drain(..) {
                 let mut old_node = unsafe { *Box::from_raw(node) };
                 unsafe {
                     ptr::drop_in_place(old_node.key.as_mut_ptr());
                     ptr::drop_in_place(old_node.val.as_mut_ptr());
                 }
             }
-            return;
+
+            // A rejected key's destructor can mutate a retained key through
+            // shared interior state. Check the index again after those drops.
+            rebuild_guard.armed = true;
+            if self.map_matches_list() {
+                rebuild_guard.armed = false;
+                return;
+            }
         }
 
-        // Slow path: at least one key mutated its hash via interior mutability.
-        // The guard keeps the cache valid if user Hash/Eq or Drop implementations panic.
+        // The index no longer matches the list. Rebuild it from surviving nodes;
+        // the guard keeps the cache valid if user Hash/Eq or Drop implementations panic.
         for &node in &removed {
             self.detach(node);
         }
@@ -1911,6 +1906,20 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
             (*(*node).prev).next = (*node).next;
             (*(*node).next).prev = (*node).prev;
         }
+    }
+
+    fn map_matches_list(&self) -> bool {
+        let mut node = unsafe { (*self.head).next };
+        while !core::ptr::eq(node, self.tail) {
+            let key_ref = KeyRef {
+                k: unsafe { (*node).key.as_ptr() },
+            };
+            if !matches!(self.map.get(&key_ref), Some(entry) if entry.as_ptr() == node) {
+                return false;
+            }
+            node = unsafe { (*node).next };
+        }
+        true
     }
 
     fn rebuild_map_from_list(&mut self) -> Vec<*mut LruEntry<K, V>> {
@@ -3425,12 +3434,7 @@ mod tests {
             30,
         );
 
-        cache.retain(|key, _| {
-            if key.value.get() == 2 {
-                key.value.set(4);
-            }
-            key.value.get() != 3
-        });
+        cache.retain(|key, _| key.value.get() != 3);
 
         assert_eq!(cache.len(), 1);
         let remaining = cache
