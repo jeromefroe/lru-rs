@@ -3201,14 +3201,8 @@ mod tests {
     fn test_no_memory_leaks_with_pop() {
         static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-        #[derive(Hash, Eq)]
+        #[derive(Hash, PartialEq, Eq)]
         struct KeyDropCounter(usize);
-
-        impl PartialEq for KeyDropCounter {
-            fn eq(&self, other: &Self) -> bool {
-                self.0.eq(&other.0)
-            }
-        }
 
         impl Drop for KeyDropCounter {
             fn drop(&mut self) {
