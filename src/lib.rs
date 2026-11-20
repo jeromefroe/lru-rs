@@ -2091,6 +2091,20 @@ impl<K: Hash + Eq, V> IntoIterator for LruCache<K, V> {
     }
 }
 
+/// Doctests for what should *not* compile
+///
+/// ```compile_fail
+/// let mut cache = lru::LruCache::<u32, u32>::unbounded();
+/// let _: &'static u32 = cache.get_or_insert(0, || 92);
+/// ```
+///
+/// ```compile_fail
+/// let mut cache = lru::LruCache::<u32, u32>::unbounded();
+/// let _: Option<(&'static u32, _)> = cache.peek_lru();
+/// let _: Option<(_, &'static u32)> = cache.peek_lru();
+/// ```
+fn _test_lifetimes() {}
+
 #[cfg(test)]
 mod tests {
     use super::LruCache;
@@ -3187,14 +3201,8 @@ mod tests {
     fn test_no_memory_leaks_with_pop() {
         static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-        #[derive(Hash, Eq)]
+        #[derive(Hash, PartialEq, Eq)]
         struct KeyDropCounter(usize);
-
-        impl PartialEq for KeyDropCounter {
-            fn eq(&self, other: &Self) -> bool {
-                self.0.eq(&other.0)
-            }
-        }
 
         impl Drop for KeyDropCounter {
             fn drop(&mut self) {
@@ -3408,17 +3416,3 @@ mod tests {
         for (_k, _v) in cache.iter() {}
     }
 }
-
-/// Doctests for what should *not* compile
-///
-/// ```compile_fail
-/// let mut cache = lru::LruCache::<u32, u32>::unbounded();
-/// let _: &'static u32 = cache.get_or_insert(0, || 92);
-/// ```
-///
-/// ```compile_fail
-/// let mut cache = lru::LruCache::<u32, u32>::unbounded();
-/// let _: Option<(&'static u32, _)> = cache.peek_lru();
-/// let _: Option<(_, &'static u32)> = cache.peek_lru();
-/// ```
-fn _test_lifetimes() {}
