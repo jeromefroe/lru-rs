@@ -3385,7 +3385,7 @@ mod tests {
 
     #[test]
     fn test_pop_panicking_key_drop_keeps_list_consistent() {
-        use std::panic::{catch_unwind, AssertUnwindSafe};
+        use std::panic::{AssertUnwindSafe, catch_unwind};
         use std::sync::atomic::{AtomicBool, Ordering};
 
         static ARMED: AtomicBool = AtomicBool::new(false);
