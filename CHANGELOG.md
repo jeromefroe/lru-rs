@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.19.1](https://github.com/jeromefroe/lru-rs/tree/0.19.1) - 2026-11-20
+
+- Set edition to 2024 and fix Clippy lints.
+
 ## [v0.19.0](https://github.com/jeromefroe/lru-rs/tree/0.19.0) - 2026-10-18
 
 - Require `Sync` for sendable shared iterators.
