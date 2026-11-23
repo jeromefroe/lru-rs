@@ -46,3 +46,9 @@ jobs:
           command: clippy
           # clippy::needless_lifetimes suggest unsound code in this crate
           args: -- -D warnings -A clippy::needless_lifetimes
+
+      # Configuring the environment is not supported in `actions-rs/cargo`.
+      - name: Check documentation
+        run: cargo doc --document-private-items
+        env:
+          RUSTDOCFLAGS: '-D warnings'
