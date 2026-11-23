@@ -1551,7 +1551,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> LruCache<K, V, S> {
     /// }
     /// assert_eq!(cache.try_get_or_insert_mut_ref(&key2, a), Ok(&mut "New two".to_owned()));
     /// assert_eq!(Rc::strong_count(&key1), 2);
-    /// // `key2` was only cloned once even though we queried it 2 times.
+    /// // `key2` was only cloned once even though we queried it 3 times.
     /// assert_eq!(Rc::strong_count(&key2), 2);
     /// ```
     #[inline]
