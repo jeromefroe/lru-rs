@@ -1885,9 +1885,9 @@ impl<K: Hash + Eq, V, S: BuildHasher> fmt::Debug for LruCache<K, V, S> {
     }
 }
 
-/// An iterator over the entries of a `LruCache`.
+/// An iterator over the entries of an [`LruCache`].
 ///
-/// This `struct` is created by the [`iter`] method on [`LruCache`][`LruCache`]. See its
+/// This `struct` is created by the [`LruCache::iter`] method. See its
 /// documentation for more.
 ///
 /// An iterator can be sent to another thread only if its keys and values are
@@ -1906,9 +1906,6 @@ impl<K: Hash + Eq, V, S: BuildHasher> fmt::Debug for LruCache<K, V, S> {
 /// fn assert_send<T: Send>() {}
 /// assert_send::<lru::Iter<'_, u8, Cell<u8>>>();
 /// ```
-///
-/// [`iter`]: struct.LruCache.html#method.iter
-/// [`LruCache`]: struct.LruCache.html
 pub struct Iter<'a, K: 'a, V: 'a> {
     len: usize,
 
@@ -1979,13 +1976,10 @@ impl<'a, K, V> Clone for Iter<'a, K, V> {
 unsafe impl<'a, K: Sync, V: Sync> Send for Iter<'a, K, V> {}
 unsafe impl<'a, K: Sync, V: Sync> Sync for Iter<'a, K, V> {}
 
-/// An iterator over mutables entries of a `LruCache`.
+/// An iterator over mutables entries of an [`LruCache`].
 ///
-/// This `struct` is created by the [`iter_mut`] method on [`LruCache`][`LruCache`]. See its
+/// This `struct` is created by the [`LruCache::iter_mut`] method. See its
 /// documentation for more.
-///
-/// [`iter_mut`]: struct.LruCache.html#method.iter_mut
-/// [`LruCache`]: struct.LruCache.html
 pub struct IterMut<'a, K: 'a, V: 'a> {
     len: usize,
 
@@ -2045,13 +2039,10 @@ impl<'a, K, V> FusedIterator for IterMut<'a, K, V> {}
 unsafe impl<'a, K: Send, V: Send> Send for IterMut<'a, K, V> {}
 unsafe impl<'a, K: Sync, V: Sync> Sync for IterMut<'a, K, V> {}
 
-/// An iterator that moves out of a `LruCache`.
+/// An iterator that moves out of an [`LruCache`].
 ///
-/// This `struct` is created by the [`into_iter`] method on [`LruCache`][`LruCache`]. See its
+/// This `struct` is created by the [`LruCache::into_iter`] method. See its
 /// documentation for more.
-///
-/// [`into_iter`]: struct.LruCache.html#method.into_iter
-/// [`LruCache`]: struct.LruCache.html
 pub struct IntoIter<K, V>
 where
     K: Hash + Eq,
