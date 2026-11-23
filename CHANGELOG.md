@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.19.2](https://github.com/jeromefroe/lru-rs/tree/0.19.2) - 2026-11-23
+
+- Add more methods to retrieve evicted entries.
+
 ## [v0.19.1](https://github.com/jeromefroe/lru-rs/tree/0.19.1) - 2026-11-20
 
 - Set edition to 2024 and fix Clippy lints.
